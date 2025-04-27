@@ -36,15 +36,57 @@ const eventSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  organizerEmail: {
+    type: String,
+    required: true,
+  },
+  organizerPhone: {
+    type: String,
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
   },
-  approved: {
-    type: Boolean,
-    default: false
+  status: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected'],
+    default: 'pending'
   },
+  verificationNotes: {
+    type: String,
+  },
+  verifiedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+  },
+  verifiedAt: {
+    type: Date,
+  },
+  capacity: {
+    type: Number,
+  },
+  website: {
+    type: String,
+  },
+  registrationFee: {
+    type: String,
+  },
+  tags: [{
+    type: String,
+  }],
+  speakers: [{
+    name: String,
+    title: String,
+    bio: String
+  }],
+  verificationNotes: {
+    type: String
+  },
+  sponsors: [{
+    name: String,
+    level: String
+  }],
   participants: [{
     user: {
       type: mongoose.Schema.Types.ObjectId,
