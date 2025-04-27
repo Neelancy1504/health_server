@@ -20,6 +20,10 @@ const userSchema = new mongoose.Schema({
     enum: ['doctor', 'pharma', 'admin'], 
     required: true 
   },
+  verified: {
+    type: Boolean,
+    default: false
+  },
   degree: { // Only for doctors
     type: String,
   },
