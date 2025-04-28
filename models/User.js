@@ -1,5 +1,5 @@
 // models/User.js
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
 const documentSchema = new mongoose.Schema({
   name: String,
@@ -9,45 +9,51 @@ const documentSchema = new mongoose.Schema({
   uploadDate: Date,
   verified: {
     type: Boolean,
-    default: false
+    default: false,
   },
-  verificationNotes: String
+  verificationNotes: String,
 });
 
-const userSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: true,
+const userSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: true,
+    },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+    },
+    password: {
+      type: String,
+      required: true,
+    },
+    role: {
+      type: String,
+      enum: ["doctor", "pharma", "admin"],
+      required: true,
+    },
+    verified: {
+      type: Boolean,
+      default: false,
+    },
+    degree: {
+      // Only for doctors
+      type: String,
+    },
+    achievements: [String], // List of achievements/certifications
+    documents: [documentSchema], // For doctor certifications
+    company: {
+      // For pharma reps
+      type: String,
+    },
+    department: {
+      // For admin
+      type: String,
+    },
   },
-  email: { 
-    type: String,
-    required: true,
-    unique: true,
-  },
-  password: {
-    type: String,
-    required: true,
-  },
-  role: { 
-    type: String, 
-    enum: ['doctor', 'pharma', 'admin'], 
-    required: true 
-  },
-  verified: {
-    type: Boolean,
-    default: false
-  },
-  degree: { // Only for doctors
-    type: String,
-  },
-  achievements: [String], // List of achievements/certifications
-  documents: [documentSchema], // For doctor certifications
-  company: { // For pharma reps
-    type: String,
-  },
-  department: { // For admin
-    type: String,
-  },
-}, { timestamps: true });
+  { timestamps: true }
+);
 
-module.exports = mongoose.model('User', userSchema);
+module.exports = mongoose.model("User", userSchema);
