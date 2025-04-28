@@ -109,4 +109,91 @@ router.get('/doctors/:id', verifyToken, adminOnly, async (req, res) => {
   }
 });
 
+// Get doctor documents
+router.get('/doctors/:id/documents', verifyToken, adminOnly, async (req, res) => {
+  try {
+    const doctor = await User.findById(req.params.id).select('documents');
+    
+    if (!doctor) {
+      return res.status(404).json({ message: 'Doctor not found' });
+    }
+    
+    res.json(doctor.documents || []);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Verify a document
+router.put('/doctors/:id/documents/:docId/verify', verifyToken, adminOnly, async (req, res) => {
+  try {
+    const { notes } = req.body;
+    
+    // Find the doctor
+    const doctor = await User.findById(req.params.id);
+    
+    if (!doctor) {
+      return res.status(404).json({ message: 'Doctor not found' });
+    }
+    
+    // Find the document
+    const document = doctor.documents.id(req.params.docId);
+    
+    if (!document) {
+      return res.status(404).json({ message: 'Document not found' });
+    }
+    
+    // Update document verification status
+    document.verified = true;
+    document.verificationNotes = notes;
+    
+    // If at least one document is verified, verify the doctor
+    doctor.verified = doctor.documents.some(doc => doc.verified);
+    
+    await doctor.save();
+    
+    res.json({ 
+      message: 'Document verified successfully',
+      document,
+      doctorVerified: doctor.verified
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Reject a document
+router.put('/doctors/:id/documents/:docId/reject', verifyToken, adminOnly, async (req, res) => {
+  try {
+    const { notes } = req.body;
+    
+    // Find the doctor
+    const doctor = await User.findById(req.params.id);
+    
+    if (!doctor) {
+      return res.status(404).json({ message: 'Doctor not found' });
+    }
+    
+    // Find the document
+    const document = doctor.documents.id(req.params.docId);
+    
+    if (!document) {
+      return res.status(404).json({ message: 'Document not found' });
+    }
+    
+    // Update document verification status
+    document.verified = false;
+    document.verificationNotes = notes;
+    
+    await doctor.save();
+    
+    res.json({ 
+      message: 'Document rejected successfully',
+      document
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 module.exports = router;
