@@ -241,7 +241,7 @@ router.post("/:id/register", verifyToken, async (req, res) => {
 });
 
 // Get event details
-router.get("/:id", async (req, res) => {
+router.get("/:id", verifyToken, async (req, res) => {
   try {
     const event = await Event.findById(req.params.id)
       .populate("createdBy", "name")
