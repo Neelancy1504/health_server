@@ -1,11 +1,15 @@
 // models/User.js
 const mongoose = require("mongoose");
 
+// Update the documentSchema
+
 const documentSchema = new mongoose.Schema({
   name: String,
   type: String,
   size: Number,
-  preview: String, // For image preview or first few bytes of PDF
+  url: String, // Cloudinary URL
+  public_id: String, // Cloudinary public ID for managing assets
+  resource_type: String,
   uploadDate: Date,
   verified: {
     type: Boolean,
