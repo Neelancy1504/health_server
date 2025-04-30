@@ -1,52 +1,56 @@
-// Create this file if it doesn't exist
-
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const User = require("../models/User");
-const verifyToken = require("../middleware/authMiddleware");
+const verifyToken = require('../middleware/authMiddleware');
+const { supabase } = require('../config/supabase');
 
 // Get current user's documents
-router.get("/my-documents", verifyToken, async (req, res) => {
+router.get('/my-documents', verifyToken, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select("documents");
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    const { data: documents, error } = await supabase
+      .from('documents')
+      .select('*')
+      .eq('user_id', req.user.id);
+      
+    if (error) {
+      throw new Error(error.message);
     }
-
-    res.json(user.documents || []);
+    
+    res.json(documents || []);
   } catch (error) {
-    console.error("Error fetching user documents:", error);
+    console.error('Error fetching user documents:', error);
     res.status(500).json({ message: error.message });
   }
 });
 
 // Upload new documents
-router.post("/documents", verifyToken, async (req, res) => {
+router.post('/documents', verifyToken, async (req, res) => {
   try {
     const { documents } = req.body;
-
+    
     if (!documents || !Array.isArray(documents) || documents.length === 0) {
-      return res.status(400).json({ message: "No valid documents provided" });
+      return res.status(400).json({ message: 'No valid documents provided' });
     }
 
-    const user = await User.findById(req.user.id);
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    // Map the documents to include user_id
+    const documentsToInsert = documents.map(doc => ({
+      ...doc,
+      user_id: req.user.id
+    }));
+    
+    const { data, error } = await supabase
+      .from('documents')
+      .insert(documentsToInsert);
+    
+    if (error) {
+      throw new Error(error.message);
     }
-
-    // Add the new documents to the user's document array
-    user.documents = [...(user.documents || []), ...documents];
-
-    await user.save();
-
-    res.status(201).json({
-      message: "Documents uploaded successfully",
-      count: documents.length,
+    
+    res.status(201).json({ 
+      message: 'Documents uploaded successfully',
+      count: documents.length
     });
   } catch (error) {
-    console.error("Error uploading documents:", error);
+    console.error('Error uploading documents:', error);
     res.status(500).json({ message: error.message });
   }
 });

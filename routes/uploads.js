@@ -1,19 +1,13 @@
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
-const cloudinary = require("../config/cloudinary");
-const fs = require("fs");
 const path = require("path");
+const fs = require("fs");
 const verifyToken = require("../middleware/authMiddleware");
+const { supabase, supabaseAdmin } = require("../config/supabase");
+const { v4: uuidv4 } = require("uuid");
 
-// Debug Cloudinary configuration
-console.log("Cloudinary config loaded:", {
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME ? "Set" : "Not set",
-  api_key: process.env.CLOUDINARY_API_KEY ? "Set" : "Not set",
-  api_secret: process.env.CLOUDINARY_API_SECRET ? "Set" : "Not set",
-});
-
-// Configure storage
+// Configure storage for temporary file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = path.join(__dirname, "../uploads");
@@ -29,71 +23,63 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-// Upload route
+// Upload document to Supabase Storage
 router.post(
   "/document",
   verifyToken,
   upload.single("document"),
   async (req, res) => {
     try {
-      // Check if file exists
       if (!req.file) {
         return res.status(400).json({ message: "No file uploaded" });
       }
 
-      console.log("File received:", {
-        originalname: req.file.originalname,
-        mimetype: req.file.mimetype,
-        size: req.file.size,
-        path: req.file.path,
-      });
+      console.log("File received:", req.file);
 
-      if (!fs.existsSync(req.file.path)) {
+      // Generate a unique filename for storage
+      const fileExtension = path.extname(req.file.originalname);
+      const fileName = `${uuidv4()}${fileExtension}`;
+      const filePath = `documents/${req.user.id}/${fileName}`;
+
+      // Upload to Supabase Storage
+      const fileBuffer = fs.readFileSync(req.file.path);
+
+      // Then in your upload route:
+      const { data, error } = await supabaseAdmin.storage
+        .from("medevents")
+        .upload(filePath, fileBuffer, {
+          contentType: req.file.mimetype,
+          cacheControl: "3600",
+          upsert: true,
+        });
+
+      if (error) {
+        console.error("Supabase storage error:", error);
         return res
           .status(500)
           .json({
-            message: "File saved but not found at path: " + req.file.path,
+            message: "Failed to upload to storage",
+            error: error.message,
           });
       }
 
-      try {
-        // Upload to cloudinary with full path
-        const fullPath = path.resolve(req.file.path);
-        console.log("Uploading to Cloudinary with path:", fullPath);
-        const result = await cloudinary.uploader.upload(fullPath, {
-          folder: "doctor-documents",
-          resource_type: "auto",
-        });
+      // Get the public URL
+      const { data: publicUrlData } = supabase.storage
+        .from("medevents")
+        .getPublicUrl(filePath);
 
-        console.log("Cloudinary upload successful:", {
-          public_id: result.public_id,
-          url: result.secure_url,
-          format: result.format,
-        });
+      const url = publicUrlData.publicUrl;
 
-        // Remove the temp file after upload
-        try {
-          fs.unlinkSync(req.file.path);
-          console.log("Temp file deleted successfully");
-        } catch (err) {
-          console.error("Error deleting temp file:", err);
-        }
+      // Remove the temp file
+      fs.unlinkSync(req.file.path);
 
-        // Return cloudinary details
-        res.status(200).json({
-          url: result.secure_url,
-          public_id: result.public_id,
-          resource_type: result.resource_type,
-          format: result.format,
-        });
-      } catch (cloudinaryError) {
-        console.error("Cloudinary upload error:", cloudinaryError);
-        res.status(500).json({
-          message: "Cloudinary upload failed",
-          error: cloudinaryError.message,
-          stack: cloudinaryError.stack,
-        });
-      }
+      res.status(200).json({
+        url,
+        storage_path: filePath,
+        name: req.file.originalname,
+        type: req.file.mimetype,
+        size: req.file.size,
+      });
     } catch (error) {
       console.error("Upload error:", error);
       res.status(500).json({ message: error.message });

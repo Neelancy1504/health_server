@@ -1,38 +1,76 @@
-// routes/auth.js
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const User = require('../models/User');
-const verifyToken = require("../middleware/authMiddleware");
-const verifyRole = require("../middleware/roleMiddleware");
-
+const { supabase } = require('../config/supabase');
+const verifyToken = require('../middleware/authMiddleware');
+const verifyRole = require('../middleware/roleMiddleware');
 // Signup Route
 router.post('/signup', async (req, res) => {
   try {
-    const { name, email, password, role, degree, achievements, company, department } = req.body;
+    const { name, email, password, role, degree, company, documents } = req.body;
 
-    const existingUser = await User.findOne({ email });
-    if (existingUser) return res.status(400).json({ message: 'User already exists' });
+    // Check if user exists
+    const { data: existingUser, error: fetchError } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', email)
+      .single();
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    if (fetchError && fetchError.code !== 'PGRST116') {
+      throw new Error(fetchError.message);
+    }
 
-    const newUser = new User({
-      name,
-      email,
-      password: hashedPassword,
-      role,
-      degree: role === 'doctor' ? degree : undefined,
-      achievements: role === 'doctor' ? achievements : undefined,
-      company: role === 'pharma' ? company : undefined,
-      department: role === 'admin' ? department : undefined,
-    });
+    if (existingUser) {
+      return res.status(400).json({ message: 'User already exists' });
+    }
 
-    await newUser.save();
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    // Create user
+    const { data: newUser, error: insertError } = await supabase
+      .from('users')
+      .insert({
+        name,
+        email,
+        password: hashedPassword,
+        role,
+        degree: role === 'doctor' ? degree : null,
+        company: role === 'pharma' ? company : null,
+      })
+      .select()
+      .single();
+
+    if (insertError) throw new Error(insertError.message);
+
+    // Handle document uploads for doctors
+    if (role === 'doctor' && documents && documents.length > 0) {
+      // Documents are already uploaded to storage at this point
+      // Just create references in the documents table
+      const documentsToInsert = documents.map(doc => ({
+        user_id: newUser.id,
+        name: doc.name,
+        type: doc.type,
+        size: doc.size,
+        storage_path: doc.storage_path,
+        url: doc.url,
+        upload_date: new Date().toISOString()
+      }));
+
+      const { error: docsError } = await supabase
+        .from('documents')
+        .insert(documentsToInsert);
+
+      if (docsError) {
+        console.error('Error storing document references:', docsError);
+      }
+    }
 
     res.status(201).json({ message: 'User registered successfully' });
-
   } catch (error) {
+    console.error('Signup error:', error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -41,18 +79,37 @@ router.post('/signup', async (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    
-    const user = await User.findOne({ email });
-    if (!user) return res.status(400).json({ message: 'User not found' });
 
+    // Find user
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email)
+      .single();
+
+    if (error || !user) {
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+
+    // Check password
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ message: 'Invalid credentials' });
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
 
-    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '1d' });
+    // Create JWT token
+    const token = jwt.sign(
+      { id: user.id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
 
-    res.json({ token, user: { id: user._id, name: user.name, email: user.email, role: user.role } });
-  
+    // Remove password from response
+    delete user.password;
+
+    res.json({ token, user });
   } catch (error) {
+    console.error('Login error:', error);
     res.status(500).json({ message: error.message });
   }
 });
