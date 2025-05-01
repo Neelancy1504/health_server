@@ -16,9 +16,9 @@ if (!supabaseUrl || !supabaseKey) {
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Admin client that bypasses RLS
-// const supabaseAdmin = supabaseServiceKey 
-//   ? createClient(supabaseUrl, supabaseServiceKey)
-//   : null;
+const supabaseAdmin = supabaseServiceKey 
+  ? createClient(supabaseUrl, supabaseServiceKey)
+  : null;
 
-// module.exports = { supabase, supabaseAdmin };
-module.exports = { supabase};
+module.exports = { supabase, supabaseAdmin };
+//module.exports = { supabase};

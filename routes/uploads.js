@@ -4,7 +4,7 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const verifyToken = require("../middleware/authMiddleware");
-const { supabase, supabaseAdmin } = require("../config/supabase");
+const { supabaseAdmin } = require("../config/supabase");
 const { v4: uuidv4 } = require("uuid");
 
 // Configure storage for temporary file uploads
@@ -44,7 +44,16 @@ router.post(
       // Upload to Supabase Storage
       const fileBuffer = fs.readFileSync(req.file.path);
 
-      // Then in your upload route:
+      // Check that supabaseAdmin is properly initialized
+      if (!supabaseAdmin || !supabaseAdmin.storage) {
+        console.error("Supabase Admin client not properly initialized");
+        return res.status(500).json({
+          message: "Storage service unavailable",
+          details: "Supabase storage client not initialized",
+        });
+      }
+
+      // Upload file to Supabase
       const { data, error } = await supabaseAdmin.storage
         .from("medevents")
         .upload(filePath, fileBuffer, {
@@ -55,16 +64,14 @@ router.post(
 
       if (error) {
         console.error("Supabase storage error:", error);
-        return res
-          .status(500)
-          .json({
-            message: "Failed to upload to storage",
-            error: error.message,
-          });
+        return res.status(500).json({
+          message: "Failed to upload to storage",
+          error: error.message,
+        });
       }
 
       // Get the public URL
-      const { data: publicUrlData } = supabase.storage
+      const { data: publicUrlData } = supabaseAdmin.storage
         .from("medevents")
         .getPublicUrl(filePath);
 
