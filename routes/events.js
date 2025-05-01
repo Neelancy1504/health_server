@@ -49,6 +49,7 @@ router.get("/registered", verifyToken, async (req, res) => {
       organizerName: event.organizer_name,
       organizerEmail: event.organizer_email,
       organizerPhone: event.organizer_phone,
+      organizer_id: event.organizer_id, // Add this
       status: event.status,
       capacity: event.capacity,
       website: event.website,
@@ -94,6 +95,7 @@ router.get("/pending", verifyToken, verifyRole(["admin"]), async (req, res) => {
       organizerName: event.organizer_name,
       organizerEmail: event.organizer_email,
       organizerPhone: event.organizer_phone,
+      organizer_id: event.organizer_id, // Add this
       status: event.status,
       capacity: event.capacity,
       website: event.website,
@@ -213,6 +215,7 @@ router.get("/my-events", verifyToken, async (req, res) => {
       end_time: event.end_time,    
       organizerName: event.organizer_name,
       organizerEmail: event.organizer_email,
+      organizer_id: event.organizer_id, // Add this
       status: event.status,
       capacity: event.capacity,
       website: event.website,
@@ -255,6 +258,7 @@ router.get("/ongoing", async (req, res) => {
       end_time: event.end_time,  
       organizerName: event.organizer_name,
       organizerEmail: event.organizer_email,
+      organizer_id: event.organizer_id, // Add this
       status: event.status,
       capacity: event.capacity,
     }));
@@ -296,6 +300,7 @@ router.get("/:id", async (req, res) => {
       organizerName: event.organizer_name,
       organizerEmail: event.organizer_email,
       organizerPhone: event.organizer_phone,
+      organizer_id: event.organizer_id, // Add this
       status: event.status,
       capacity: event.capacity,
       website: event.website,
@@ -501,6 +506,66 @@ router.post("/:id/register", verifyToken, async (req, res) => {
     res.status(201).json({ message: "Successfully registered for the event" });
   } catch (error) {
     console.error("Error registering for event:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Update event
+router.put("/:id", verifyToken, async (req, res) => {
+  try {
+    const eventId = req.params.id;
+    const eventData = req.body;
+
+    // Check if user is authorized to edit this event
+    const { data: event, error: fetchError } = await supabase
+      .from("events")
+      .select("organizer_id")
+      .eq("id", eventId)
+      .single();
+
+    if (fetchError) throw fetchError;
+
+    if (!event) {
+      return res.status(404).json({ message: "Event not found" });
+    }
+
+    // Only allow editing by event creator or admin
+    if (req.user.role !== "admin" && event.organizer_id !== req.user.id) {
+      return res.status(403).json({ message: "Not authorized to edit this event" });
+    }
+
+    // Update the event
+    const { data, error } = await supabase
+      .from("events")
+      .update({
+        title: eventData.title,
+        description: eventData.description,
+        type: eventData.type,
+        mode: eventData.mode,
+        start_date: eventData.startDate,
+        end_date: eventData.endDate,
+        start_time: eventData.start_time,
+        end_time: eventData.end_time,
+        venue: eventData.venue,
+        organizer_name: eventData.organizerName,
+        organizer_email: eventData.organizerEmail,
+        organizer_phone: eventData.organizerPhone,
+        capacity: eventData.capacity,
+        website: eventData.website,
+        registration_fee: eventData.registrationFee,
+        tags: eventData.tags,
+        speakers: eventData.speakers,
+        sponsors: eventData.sponsors,
+        terms_and_conditions: eventData.termsAndConditions,
+      })
+      .eq("id", eventId)
+      .select();
+
+    if (error) throw error;
+
+    res.json({ message: "Event updated successfully", event: data[0] });
+  } catch (error) {
+    console.error("Error updating event:", error);
     res.status(500).json({ message: error.message });
   }
 });
