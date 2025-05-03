@@ -510,7 +510,7 @@ router.post("/:id/register", verifyToken, async (req, res) => {
   }
 });
 
-// Update event
+// Update the existing PUT /:id route to better handle admin editing of pending events
 router.put("/:id", verifyToken, async (req, res) => {
   try {
     const eventId = req.params.id;
@@ -519,7 +519,7 @@ router.put("/:id", verifyToken, async (req, res) => {
     // Check if user is authorized to edit this event
     const { data: event, error: fetchError } = await supabase
       .from("events")
-      .select("organizer_id")
+      .select("organizer_id, status")
       .eq("id", eventId)
       .single();
 
@@ -534,10 +534,79 @@ router.put("/:id", verifyToken, async (req, res) => {
       return res.status(403).json({ message: "Not authorized to edit this event" });
     }
 
+    // For regular users, restrict editing of approved events
+    if (req.user.role !== "admin" && event.status === "approved") {
+      return res.status(403).json({ message: "Cannot edit an event that has already been approved" });
+    }
+    
+    // Prepare update data - Admin can update all fields, regular users have restrictions
+    let updateData = {
+      title: eventData.title,
+      description: eventData.description,
+      type: eventData.type,
+      mode: eventData.mode,
+      start_date: eventData.startDate,
+      end_date: eventData.endDate,
+      start_time: eventData.start_time,
+      end_time: eventData.end_time,
+      venue: eventData.venue,
+      organizer_name: eventData.organizerName,
+      organizer_email: eventData.organizerEmail,
+      website: eventData.website,
+    };
+    
+    // Fields that only admins can modify for pending events
+    if (req.user.role === "admin") {
+      updateData = {
+        ...updateData,
+        organizer_phone: eventData.organizerPhone || null,
+        capacity: eventData.capacity || null,
+        registration_fee: eventData.registrationFee || "0",
+        tags: eventData.tags || [],
+        speakers: eventData.speakers || [],
+        sponsors: eventData.sponsors || [],
+        terms_and_conditions: eventData.termsAndConditions || "",
+      };
+      
+      // Track that admin has edited this event
+      updateData.admin_edited = true;
+      updateData.admin_edited_at = new Date().toISOString();
+      updateData.admin_editor = req.user.id;
+    }
+
     // Update the event
     const { data, error } = await supabase
       .from("events")
-      .update({
+      .update(updateData)
+      .eq("id", eventId)
+      .select();
+
+    if (error) throw error;
+
+    res.json({ 
+      message: "Event updated successfully", 
+      event: data[0],
+      isAdmin: req.user.role === "admin" 
+    });
+  } catch (error) {
+    console.error("Error updating event:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Add a new combined route for admins to update and approve an event in one step
+router.put(
+  "/:id/update-and-approve",
+  verifyToken,
+  verifyRole(["admin"]),
+  async (req, res) => {
+    try {
+      const eventId = req.params.id;
+      const eventData = req.body;
+      const { notes } = req.body;
+
+      // First update the event with all details
+      const updateData = {
         title: eventData.title,
         description: eventData.description,
         type: eventData.type,
@@ -549,25 +618,46 @@ router.put("/:id", verifyToken, async (req, res) => {
         venue: eventData.venue,
         organizer_name: eventData.organizerName,
         organizer_email: eventData.organizerEmail,
-        organizer_phone: eventData.organizerPhone,
-        capacity: eventData.capacity,
-        website: eventData.website,
-        registration_fee: eventData.registrationFee,
-        tags: eventData.tags,
-        speakers: eventData.speakers,
-        sponsors: eventData.sponsors,
-        terms_and_conditions: eventData.termsAndConditions,
-      })
-      .eq("id", eventId)
-      .select();
+        organizer_phone: eventData.organizerPhone || null,
+        capacity: eventData.capacity || null,
+        website: eventData.website || null,
+        registration_fee: eventData.registrationFee || "0",
+        tags: eventData.tags || [],
+        speakers: eventData.speakers || [],
+        sponsors: eventData.sponsors || [],
+        terms_and_conditions: eventData.termsAndConditions || "",
+        // Set approval fields
+        status: "approved",
+        verification_notes: notes || "Event updated and approved by admin",
+        verified_by: req.user.id,
+        verified_at: new Date().toISOString(),
+        admin_edited: true,
+        admin_edited_at: new Date().toISOString(),
+        admin_editor: req.user.id
+      };
 
-    if (error) throw error;
+      // Update the event with all details and approve in one step
+      const { data, error } = await supabase
+        .from("events")
+        .update(updateData)
+        .eq("id", eventId)
+        .select();
 
-    res.json({ message: "Event updated successfully", event: data[0] });
-  } catch (error) {
-    console.error("Error updating event:", error);
-    res.status(500).json({ message: error.message });
+      if (error) throw error;
+
+      if (!data || data.length === 0) {
+        return res.status(404).json({ message: "Event not found" });
+      }
+
+      res.json({ 
+        message: "Event updated and approved successfully", 
+        event: data[0] 
+      });
+    } catch (error) {
+      console.error("Error updating and approving event:", error);
+      res.status(500).json({ message: error.message });
+    }
   }
-});
+);
 
 module.exports = router;
