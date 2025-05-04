@@ -44,7 +44,7 @@ router.get("/registered", verifyToken, async (req, res) => {
       venue: event.venue,
       startDate: event.start_date,
       endDate: event.end_date,
-      start_time: event.start_time, 
+      start_time: event.start_time,
       end_time: event.end_time,
       organizerName: event.organizer_name,
       organizerEmail: event.organizer_email,
@@ -90,8 +90,8 @@ router.get("/pending", verifyToken, verifyRole(["admin"]), async (req, res) => {
       venue: event.venue,
       startDate: event.start_date,
       endDate: event.end_date,
-      start_time: event.start_time, 
-      end_time: event.end_time,    
+      start_time: event.start_time,
+      end_time: event.end_time,
       organizerName: event.organizer_name,
       organizerEmail: event.organizer_email,
       organizerPhone: event.organizer_phone,
@@ -137,7 +137,7 @@ router.post("/", verifyToken, async (req, res) => {
         mode: eventData.mode,
         start_date: eventData.startDate,
         end_date: eventData.endDate,
-        start_time: eventData.start_time, 
+        start_time: eventData.start_time,
         end_time: eventData.end_time,
         venue: eventData.venue,
         organizer_name: eventData.organizerName,
@@ -152,6 +152,7 @@ router.post("/", verifyToken, async (req, res) => {
         speakers: eventData.speakers || [],
         sponsors: eventData.sponsors || [],
         terms_and_conditions: eventData.termsAndConditions || "",
+        brochure: eventData.brochure || null, // Add brochure field
       })
       .select();
 
@@ -211,8 +212,8 @@ router.get("/my-events", verifyToken, async (req, res) => {
       venue: event.venue,
       startDate: event.start_date,
       endDate: event.end_date,
-      start_time: event.start_time, 
-      end_time: event.end_time,    
+      start_time: event.start_time,
+      end_time: event.end_time,
       organizerName: event.organizer_name,
       organizerEmail: event.organizer_email,
       organizer_id: event.organizer_id, // Add this
@@ -254,8 +255,8 @@ router.get("/ongoing", async (req, res) => {
       venue: event.venue,
       startDate: event.start_date,
       endDate: event.end_date,
-      start_time: event.start_time, 
-      end_time: event.end_time,  
+      start_time: event.start_time,
+      end_time: event.end_time,
       organizerName: event.organizer_name,
       organizerEmail: event.organizer_email,
       organizer_id: event.organizer_id, // Add this
@@ -273,10 +274,13 @@ router.get("/ongoing", async (req, res) => {
 // Get event by ID
 router.get("/:id", async (req, res) => {
   try {
+    const eventId = req.params.id;
+
+    // Query for the event with all fields, including brochure
     const { data: event, error } = await supabase
       .from("events")
-      .select("*, users:organizer_id(name, email)")
-      .eq("id", req.params.id)
+      .select("*, brochure")
+      .eq("id", eventId)
       .single();
 
     if (error) throw error;
@@ -295,8 +299,8 @@ router.get("/:id", async (req, res) => {
       venue: event.venue,
       startDate: event.start_date,
       endDate: event.end_date,
-      start_time: event.start_time, 
-      end_time: event.end_time,    
+      start_time: event.start_time,
+      end_time: event.end_time,
       organizerName: event.organizer_name,
       organizerEmail: event.organizer_email,
       organizerPhone: event.organizer_phone,
@@ -319,7 +323,7 @@ router.get("/:id", async (req, res) => {
 
     res.json(formattedEvent);
   } catch (error) {
-    console.error("Error fetching event:", error);
+    console.error("Get event error:", error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -511,10 +515,16 @@ router.post("/:id/register", verifyToken, async (req, res) => {
 });
 
 // Update the existing PUT /:id route to better handle admin editing of pending events
+// Update the existing PUT /:id route in events.js to properly handle brochure data
 router.put("/:id", verifyToken, async (req, res) => {
   try {
     const eventId = req.params.id;
     const eventData = req.body;
+
+    console.log(
+      "Received update request with brochure:",
+      JSON.stringify(eventData.brochure)
+    );
 
     // Check if user is authorized to edit this event
     const { data: event, error: fetchError } = await supabase
@@ -531,16 +541,22 @@ router.put("/:id", verifyToken, async (req, res) => {
 
     // Only allow editing by event creator or admin
     if (req.user.role !== "admin" && event.organizer_id !== req.user.id) {
-      return res.status(403).json({ message: "Not authorized to edit this event" });
+      return res
+        .status(403)
+        .json({ message: "Not authorized to edit this event" });
     }
 
     // For regular users, restrict editing of approved events
     if (req.user.role !== "admin" && event.status === "approved") {
-      return res.status(403).json({ message: "Cannot edit an event that has already been approved" });
+      return res
+        .status(403)
+        .json({
+          message: "Cannot edit an event that has already been approved",
+        });
     }
-    
-    // Prepare update data - Admin can update all fields, regular users have restrictions
-    let updateData = {
+
+    // Base fields that anyone can update
+    const baseUpdateData = {
       title: eventData.title,
       description: eventData.description,
       type: eventData.type,
@@ -554,8 +570,10 @@ router.put("/:id", verifyToken, async (req, res) => {
       organizer_email: eventData.organizerEmail,
       website: eventData.website,
     };
-    
-    // Fields that only admins can modify for pending events
+
+    // Fields only admins can modify
+    let updateData = { ...baseUpdateData };
+
     if (req.user.role === "admin") {
       updateData = {
         ...updateData,
@@ -567,12 +585,22 @@ router.put("/:id", verifyToken, async (req, res) => {
         sponsors: eventData.sponsors || [],
         terms_and_conditions: eventData.termsAndConditions || "",
       };
-      
+
       // Track that admin has edited this event
       updateData.admin_edited = true;
       updateData.admin_edited_at = new Date().toISOString();
       updateData.admin_editor = req.user.id;
     }
+
+    // Always include brochure in update if it's provided
+    if (eventData.brochure !== undefined) {
+      updateData.brochure = eventData.brochure;
+    }
+
+    console.log(
+      "Final updateData with brochure:",
+      JSON.stringify(updateData.brochure)
+    );
 
     // Update the event
     const { data, error } = await supabase
@@ -581,12 +609,15 @@ router.put("/:id", verifyToken, async (req, res) => {
       .eq("id", eventId)
       .select();
 
-    if (error) throw error;
+    if (error) {
+      console.error("Update error:", error);
+      throw error;
+    }
 
-    res.json({ 
-      message: "Event updated successfully", 
+    res.json({
+      message: "Event updated successfully",
       event: data[0],
-      isAdmin: req.user.role === "admin" 
+      isAdmin: req.user.role === "admin",
     });
   } catch (error) {
     console.error("Error updating event:", error);
@@ -604,6 +635,8 @@ router.put(
       const eventId = req.params.id;
       const eventData = req.body;
       const { notes } = req.body;
+
+      console.log("Updating and approving with brochure:", eventData.brochure);
 
       // First update the event with all details
       const updateData = {
@@ -626,6 +659,8 @@ router.put(
         speakers: eventData.speakers || [],
         sponsors: eventData.sponsors || [],
         terms_and_conditions: eventData.termsAndConditions || "",
+        // Add brochure field - make sure we're setting it properly
+        brochure: eventData.brochure,
         // Set approval fields
         status: "approved",
         verification_notes: notes || "Event updated and approved by admin",
@@ -633,8 +668,13 @@ router.put(
         verified_at: new Date().toISOString(),
         admin_edited: true,
         admin_edited_at: new Date().toISOString(),
-        admin_editor: req.user.id
+        admin_editor: req.user.id,
       };
+
+      console.log(
+        "Update data for combined route:",
+        JSON.stringify(updateData)
+      );
 
       // Update the event with all details and approve in one step
       const { data, error } = await supabase
@@ -649,9 +689,9 @@ router.put(
         return res.status(404).json({ message: "Event not found" });
       }
 
-      res.json({ 
-        message: "Event updated and approved successfully", 
-        event: data[0] 
+      res.json({
+        message: "Event updated and approved successfully",
+        event: data[0],
       });
     } catch (error) {
       console.error("Error updating and approving event:", error);
@@ -659,5 +699,34 @@ router.put(
     }
   }
 );
+
+// Get brochure for an event
+router.get("/:id/brochure", async (req, res) => {
+  try {
+    const eventId = req.params.id;
+
+    const { data: brochureData, error } = await supabase
+      .from("brochures")
+      .select("*")
+      .eq("event_id", eventId)
+      .order("upload_date", { ascending: false })
+      .limit(1);
+
+    if (error) {
+      throw error;
+    }
+
+    if (!brochureData || brochureData.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "No brochure found for this event" });
+    }
+
+    res.json(brochureData[0]);
+  } catch (error) {
+    console.error("Error fetching event brochure:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
 
 module.exports = router;
