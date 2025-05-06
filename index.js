@@ -3,7 +3,7 @@ const cors = require("cors");
 const dotenv = require("dotenv");
 const fs = require("fs");
 const path = require("path");
-const http = require('http');
+const http = require("http");
 const { Server } = require("socket.io");
 
 // Make sure to load environment variables right away
@@ -22,21 +22,23 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST"],
+  },
 });
 
 // Middleware
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 // Update your CORS configuration
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Range'],
-  exposedHeaders: ['Content-Length', 'Content-Range', 'Content-Disposition'],
-}));
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Range"],
+    exposedHeaders: ["Content-Length", "Content-Range", "Content-Disposition"],
+  })
+);
 
 // Routes
 const authRoutes = require("./routes/auth");
@@ -65,15 +67,17 @@ app.get("/api/health", (req, res) => {
 app.get("/api/test-supabase", async (req, res) => {
   try {
     const { data, error } = await supabase.from("users").select("count");
-    
+
     if (error) {
       throw error;
     }
-    
+
     res.json({ message: "Supabase connection successful", data });
   } catch (error) {
     console.error("Supabase connection error:", error);
-    res.status(500).json({ message: "Supabase connection failed", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Supabase connection failed", error: error.message });
   }
 });
 
@@ -81,86 +85,84 @@ app.get("/api/test-supabase", async (req, res) => {
 app.get("/api/test-events", async (req, res) => {
   try {
     // Test if events table exists and is accessible
-    const { data, error } = await supabase
-      .from('events')
-      .select('count');
-      
+    const { data, error } = await supabase.from("events").select("count");
+
     if (error) {
       throw error;
     }
-    
+
     res.json({ success: true, data });
   } catch (error) {
-    console.error('Error accessing events table:', error);
+    console.error("Error accessing events table:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
 // Get all doctors endpoint
-app.get('/api/doctors', async (req, res) => {
+app.get("/api/doctors", async (req, res) => {
   try {
     const { data, error } = await supabase
-      .from('users')
-      .select('id, name, role, degree, achievements')
-      .eq('role', 'doctor');  // Only get users with role 'doctor'
-    
+      .from("users")
+      .select("id, name, role, degree, achievements")
+      .eq("role", "doctor"); // Only get users with role 'doctor'
+
     if (error) throw error;
-    
-    console.log('Doctors fetched:', data.length);
+
+    console.log("Doctors fetched:", data.length);
     res.json(data);
   } catch (error) {
-    console.error('Error fetching doctors:', error);
+    console.error("Error fetching doctors:", error);
     res.status(500).json({ message: error.message });
   }
 });
 
 // Get chat messages endpoint
-app.get('/api/messages/:roomId', async (req, res) => {
+app.get("/api/messages/:roomId", async (req, res) => {
   try {
     const { roomId } = req.params;
     const { data, error } = await supabase
-      .from('messages')
-      .select('*')
-      .eq('room_id', roomId)
-      .order('created_at', { ascending: false })
+      .from("messages")
+      .select("*")
+      .eq("room_id", roomId)
+      .order("created_at", { ascending: false })
       .limit(50);
-    
+
     if (error) throw error;
-    
+
     res.json(data);
   } catch (error) {
-    console.error('Error fetching messages:', error);
+    console.error("Error fetching messages:", error);
     res.status(500).json({ message: error.message });
   }
 });
 
 // Add message via HTTP API (fallback method)
-app.post('/api/messages', async (req, res) => {
+app.post("/api/messages", async (req, res) => {
   try {
     const messageData = req.body;
-    console.log('Received message via HTTP:', messageData);
-    
+    console.log("Received message via HTTP:", messageData);
+
     // Message validation
     if (!messageData.content && messageData.text) {
       messageData.content = messageData.text;
     }
-    
+
     if (!messageData.sender_id && messageData.senderId) {
       messageData.sender_id = messageData.senderId;
     }
-    
+
     if (!messageData.sender_name && messageData.senderName) {
       messageData.sender_name = messageData.senderName;
     }
-    
+
     if (!messageData.receiver_id && messageData.receiverId) {
       messageData.receiver_id = messageData.receiverId;
     }
-    
+
     if (!messageData.room_id && messageData.roomId) {
       messageData.room_id = messageData.roomId;
     }
-    
+
     // Prepare the message object for insertion
     const messageToInsert = {
       content: messageData.content,
@@ -170,22 +172,22 @@ app.post('/api/messages', async (req, res) => {
       room_id: messageData.room_id,
       // created_at is handled automatically by Supabase
     };
-    
-    console.log('Inserting message into Supabase:', messageToInsert);
-    
+
+    console.log("Inserting message into Supabase:", messageToInsert);
+
     const { data, error } = await supabase
-      .from('messages')
+      .from("messages")
       .insert(messageToInsert)
       .select();
-    
+
     if (error) throw error;
-    
-    console.log('Message saved to Supabase via HTTP API:', data);
-    
+
+    console.log("Message saved to Supabase via HTTP API:", data);
+
     // Broadcast to room via socket for real-time updates
     if (data && data.length > 0) {
       const savedMessage = data[0];
-      
+
       const messageToEmit = {
         id: savedMessage.id,
         text: savedMessage.content,
@@ -199,44 +201,44 @@ app.post('/api/messages', async (req, res) => {
         timestamp: savedMessage.created_at,
         created_at: savedMessage.created_at,
         roomId: savedMessage.room_id,
-        room_id: savedMessage.room_id
+        room_id: savedMessage.room_id,
       };
-      
-      io.to(savedMessage.room_id).emit('receive_message', messageToEmit);
-      
+
+      io.to(savedMessage.room_id).emit("receive_message", messageToEmit);
+
       res.status(201).json({
         success: true,
-        message: 'Message saved successfully',
-        id: savedMessage.id
+        message: "Message saved successfully",
+        id: savedMessage.id,
       });
     } else {
       res.status(201).json({
         success: true,
-        message: 'Message processed but no data returned'
+        message: "Message processed but no data returned",
       });
     }
   } catch (error) {
-    console.error('Error saving message via HTTP:', error);
+    console.error("Error saving message via HTTP:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to save message',
-      error: error.message
+      message: "Failed to save message",
+      error: error.message,
     });
   }
 });
 
 // Socket connection handling
-io.on('connection', (socket) => {
-  console.log('New client connected', socket.id);
-  
-  socket.on('join_room', (roomId) => {
+io.on("connection", (socket) => {
+  console.log("New client connected", socket.id);
+
+  socket.on("join_room", (roomId) => {
     socket.join(roomId);
     console.log(`User ${socket.id} joined room: ${roomId}`);
   });
 
-  socket.on('send_message', async (messageData) => {
-    console.log('Message received via socket:', messageData);
-    
+  socket.on("send_message", async (messageData) => {
+    console.log("Message received via socket:", messageData);
+
     try {
       // Handle field name compatibility
       const messageToInsert = {
@@ -247,19 +249,19 @@ io.on('connection', (socket) => {
         room_id: messageData.room_id || messageData.roomId,
         // created_at is handled automatically by Supabase
       };
-      
+
       // Insert message into Supabase
       const { data, error } = await supabase
-        .from('messages')
+        .from("messages")
         .insert(messageToInsert)
         .select();
-      
+
       if (error) throw error;
-      
+
       // Only emit if data returned
       if (data && data.length > 0) {
         const savedMessage = data[0];
-        
+
         // Create a message object with both naming conventions for full compatibility
         const messageToEmit = {
           id: savedMessage.id,
@@ -274,216 +276,318 @@ io.on('connection', (socket) => {
           timestamp: savedMessage.created_at,
           created_at: savedMessage.created_at,
           roomId: savedMessage.room_id,
-          room_id: savedMessage.room_id
+          room_id: savedMessage.room_id,
         };
-        
+
         // Include the original sender's socket ID to prevent duplicate messages
-        socket.to(savedMessage.room_id).emit('receive_message', messageToEmit);
+        socket.to(savedMessage.room_id).emit("receive_message", messageToEmit);
         // Send back to sender with confirmation
-        socket.emit('message_confirmed', messageToEmit);
+        socket.emit("message_confirmed", messageToEmit);
       }
     } catch (error) {
-      console.error('Error saving message via socket:', error);
-      socket.emit('message_error', {
+      console.error("Error saving message via socket:", error);
+      socket.emit("message_error", {
         success: false,
-        message: 'Failed to save message',
-        error: error.message
+        message: "Failed to save message",
+        error: error.message,
       });
     }
   });
 
-  socket.on('typing', (data) => {
+  socket.on("typing", (data) => {
     // Forward typing indicator to the room
-    socket.to(data.roomId || data.room_id).emit('user_typing', {
+    socket.to(data.roomId || data.room_id).emit("user_typing", {
       userId: data.userId || data.user_id,
       userName: data.userName || data.user_name,
       roomId: data.roomId || data.room_id,
-      isTyping: data.isTyping
+      isTyping: data.isTyping,
     });
   });
 
-  socket.on('leave_room', (roomId) => {
+  socket.on("leave_room", (roomId) => {
     socket.leave(roomId);
     console.log(`User ${socket.id} left room: ${roomId}`);
   });
 
-  socket.on('disconnect', () => {
-    console.log('Client disconnected', socket.id);
+  socket.on("disconnect", () => {
+    console.log("Client disconnected", socket.id);
   });
 });
 
 // Create a chat room API
-app.post('/api/chat-rooms', async (req, res) => {
+app.post("/api/chat-rooms", async (req, res) => {
   try {
-    const { name, user1_id, user2_id, type = 'direct' } = req.body;
-    
+    const { name, user1_id, user2_id, type = "direct" } = req.body;
+
     if (!user1_id || !user2_id) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Both users are required to create a chat room'
+      return res.status(400).json({
+        success: false,
+        message: "Both users are required to create a chat room",
       });
     }
-    
+
     // Check if room already exists between these users
     let roomId;
     const { data: existingRooms, error: roomError } = await supabase
-      .from('chat_rooms')
-      .select('*')
-      .eq('type', 'direct')
+      .from("chat_rooms")
+      .select("*")
+      .eq("type", "direct")
       .or(`user1_id.eq.${user1_id},user1_id.eq.${user2_id}`)
       .or(`user2_id.eq.${user1_id},user2_id.eq.${user2_id}`);
-    
+
     if (roomError) throw roomError;
-    
+
     if (existingRooms && existingRooms.length > 0) {
       // Room exists - return existing room
       const existingRoom = existingRooms.find(
-        room => (room.user1_id === user1_id && room.user2_id === user2_id) || 
-               (room.user1_id === user2_id && room.user2_id === user1_id)
+        (room) =>
+          (room.user1_id === user1_id && room.user2_id === user2_id) ||
+          (room.user1_id === user2_id && room.user2_id === user1_id)
       );
-      
+
       if (existingRoom) {
         return res.status(200).json({
           success: true,
-          message: 'Chat room already exists',
-          room: existingRoom
+          message: "Chat room already exists",
+          room: existingRoom,
         });
       }
     }
-    
+
     // Create new room
     const roomData = {
       name: name || `Chat between ${user1_id} and ${user2_id}`,
       user1_id,
       user2_id,
       type,
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
     };
-    
+
     const { data: newRoom, error: createError } = await supabase
-      .from('chat_rooms')
+      .from("chat_rooms")
       .insert(roomData)
       .select();
-    
+
     if (createError) throw createError;
-    
+
     res.status(201).json({
       success: true,
-      message: 'Chat room created successfully',
-      room: newRoom[0]
+      message: "Chat room created successfully",
+      room: newRoom[0],
     });
   } catch (error) {
-    console.error('Error creating chat room:', error);
+    console.error("Error creating chat room:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to create chat room',
-      error: error.message
+      message: "Failed to create chat room",
+      error: error.message,
     });
   }
 });
 
 // Get chat rooms for a user
-app.get('/api/chat-rooms/:userId', async (req, res) => {
+app.get("/api/chat-rooms/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
-    
+
     // Get rooms where user is either user1 or user2
     const { data, error } = await supabase
-      .from('chat_rooms')
-      .select(`
+      .from("chat_rooms")
+      .select(
+        `
         *,
         user1:user1_id(id, name, role, avatar_url),
         user2:user2_id(id, name, role, avatar_url)
-      `)
+      `
+      )
       .or(`user1_id.eq.${userId},user2_id.eq.${userId}`);
-    
+
     if (error) throw error;
-    
+
     res.json({
       success: true,
-      rooms: data
+      rooms: data,
     });
   } catch (error) {
-    console.error('Error fetching chat rooms:', error);
+    console.error("Error fetching chat rooms:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch chat rooms',
-      error: error.message
+      message: "Failed to fetch chat rooms",
+      error: error.message,
     });
   }
 });
 
 // Get user profile data
-app.get('/api/user-profile/:userId', async (req, res) => {
+app.get("/api/user-profile/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
-    
+
     const { data, error } = await supabase
-      .from('users')
-      .select('id, name, email, role, avatar_url, degree, achievements, specialization, created_at')
-      .eq('id', userId)
+      .from("users")
+      .select(
+        "id, name, email, role, avatar_url, degree, achievements, specialization, created_at"
+      )
+      .eq("id", userId)
       .single();
-    
+
     if (error) throw error;
-    
+
     if (!data) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ message: "User not found" });
     }
-    
+
     res.json(data);
   } catch (error) {
-    console.error('Error fetching user profile:', error);
+    console.error("Error fetching user profile:", error);
     res.status(500).json({ message: error.message });
   }
 });
 
 // Update user profile
-app.put('/api/user-profile/:userId', async (req, res) => {
+app.put("/api/user-profile/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
     const updates = req.body;
-    
+
     // Remove sensitive fields that shouldn't be updated directly
     delete updates.id;
     delete updates.email;
     delete updates.created_at;
-    
+
     const { data, error } = await supabase
-      .from('users')
+      .from("users")
       .update(updates)
-      .eq('id', userId)
+      .eq("id", userId)
       .select();
-    
+
     if (error) throw error;
-    
+
     res.json({
       success: true,
-      message: 'Profile updated successfully',
-      user: data[0]
+      message: "Profile updated successfully",
+      user: data[0],
     });
   } catch (error) {
-    console.error('Error updating profile:', error);
+    console.error("Error updating profile:", error);
     res.status(500).json({
       success: false,
-      message: 'Failed to update profile',
-      error: error.message
+      message: "Failed to update profile",
+      error: error.message,
     });
   }
 });
 
+// Serve a welcome page at the root route
+app.get("/", (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>MedEvent API Server</title>
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+                line-height: 1.6;
+                color: #333;
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 20px;
+            }
+            .container {
+                background-color: #fff;
+                border-radius: 8px;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                padding: 30px;
+                margin-top: 40px;
+            }
+            h1 {
+                color: #2e7af5;
+                margin-top: 0;
+                border-bottom: 2px solid #eee;
+                padding-bottom: 10px;
+            }
+            .status {
+                display: inline-block;
+                background-color: #4caf50;
+                color: white;
+                padding: 4px 12px;
+                border-radius: 16px;
+                font-size: 14px;
+                margin-left: 10px;
+            }
+            .endpoint {
+                background-color: #f5f5f5;
+                border-left: 4px solid #2e7af5;
+                padding: 8px 16px;
+                margin: 12px 0;
+                font-family: monospace;
+                font-size: 14px;
+            }
+            .footer {
+                margin-top: 40px;
+                text-align: center;
+                font-size: 14px;
+                color: #666;
+            }
+            .logo {
+                text-align: center;
+                margin-bottom: 20px;
+            }
+            .logo span {
+                font-size: 48px;
+                color: #2e7af5;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="logo">
+                <span>💊</span>
+            </div>
+            <h1>MedEvent API Server <span class="status">Online</span></h1>
+            <p>Welcome to the MedEvent API server. This backend service powers the MedEvent mobile application, providing functionalities for medical events management, user authentication, and real-time communication.</p>
+            
+            <h2>API Status</h2>
+            <p>The server is up and running. All systems operational.</p>
+            
+            <h2>Available Endpoints</h2>
+            <p>Some key endpoints include:</p>
+            <div class="endpoint">/api/health</div>
+            <div class="endpoint">/api/auth/login</div>
+            <div class="endpoint">/api/events</div>
+            <div class="endpoint">/api/doctors</div>
+            
+            <p>This server also supports WebSocket connections for real-time chat functionality.</p>
+            
+            <h2>For Developers</h2>
+            <p>If you're a developer working on the MedEvent application, please refer to the API documentation for detailed information on available endpoints and request formats.</p>
+            
+            <div class="footer">
+                MedEvent Server &copy; ${new Date().getFullYear()} | Server Time: ${new Date().toLocaleString()}
+            </div>
+        </div>
+    </body>
+    </html>
+  `);
+});
+
+
 // Serve static assets in production
-if (process.env.NODE_ENV === 'production') {
+if (process.env.NODE_ENV === "production") {
   // Set static folder
-  const clientBuildPath = path.join(__dirname, '../client/build');
-  
+  const clientBuildPath = path.join(__dirname, "../client/build");
+
   if (fs.existsSync(clientBuildPath)) {
     app.use(express.static(clientBuildPath));
-    
-    app.get('*', (req, res) => {
-      res.sendFile(path.resolve(__dirname, '../client', 'build', 'index.html'));
+
+    app.get("*", (req, res) => {
+      res.sendFile(path.resolve(__dirname, "../client", "build", "index.html"));
     });
   } else {
-    console.warn('Client build folder not found.');
+    console.warn("Client build folder not found.");
   }
 }
 
@@ -493,12 +597,12 @@ const PORT = process.env.PORT || 5000;
 // Start server
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
 });
 
 // Handle unhandled promise rejections
-process.on('unhandledRejection', (err) => {
-  console.error('Unhandled Promise Rejection:', err);
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled Promise Rejection:", err);
 });
 
 module.exports = { app, server }; // Export for testing
