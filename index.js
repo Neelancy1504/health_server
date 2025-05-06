@@ -53,9 +53,11 @@ app.use("/api/users", userRoutes);
 app.use("/api/uploads", uploadRoutes);
 
 // Create an uploads directory
-const uploadsDir = path.join(__dirname, "uploads");
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+if (process.env.NODE_ENV !== 'production') {
+  const uploadsDir = path.join(__dirname, "uploads");
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
 }
 
 // Health check endpoint
@@ -574,7 +576,6 @@ app.get("/", (req, res) => {
   `);
 });
 
-
 // Serve static assets in production
 if (process.env.NODE_ENV === "production") {
   // Set static folder
@@ -594,15 +595,13 @@ if (process.env.NODE_ENV === "production") {
 // Set port
 const PORT = process.env.PORT || 5000;
 
-// Start server
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
-});
+// Server listening logic for local development
+if (process.env.NODE_ENV !== "production") {
+  server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+  });
+}
 
-// Handle unhandled promise rejections
-process.on("unhandledRejection", (err) => {
-  console.error("Unhandled Promise Rejection:", err);
-});
-
-module.exports = { app, server }; // Export for testing
+// For Vercel serverless deployment
+module.exports = app;

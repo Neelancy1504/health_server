@@ -10,11 +10,17 @@ const { supabase, supabaseAdmin } = require("../config/supabase"); // Add this l
 // Configure storage for temporary file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, "../uploads");
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
+    if (process.env.NODE_ENV === 'production') {
+      // In production (Vercel), use memory storage
+      cb(null, '/tmp'); // Vercel allows writing to /tmp
+    } else {
+      // In development, use disk storage
+      const uploadDir = path.join(__dirname, "../uploads");
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+      }
+      cb(null, uploadDir);
     }
-    cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
     cb(null, `${Date.now()}-${file.originalname.replace(/\s/g, "_")}`);
