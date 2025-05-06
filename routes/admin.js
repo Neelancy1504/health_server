@@ -679,21 +679,23 @@ router.get(
       // Get registrations with user details - REMOVE phone from selection
       const { data: registrations, error: regError } = await supabase
         .from("event_registrations")
-        .select(`
+        .select(
+          `
           *,
           user:user_id(id, name, email, role, degree, company)
-        `)
+        `
+        )
         .eq("event_id", eventId);
 
       if (regError) throw regError;
 
       // Add phone property with default value for compatibility with frontend
-      const formattedRegistrations = registrations.map(reg => ({
+      const formattedRegistrations = registrations.map((reg) => ({
         ...reg,
         user: {
           ...reg.user,
-          phone: reg.user.phone || 'Not provided'  // Set default value
-        }
+          phone: reg.user.phone || "Not provided", // Set default value
+        },
       }));
 
       res.json(formattedRegistrations);
@@ -755,10 +757,12 @@ router.get(
       // Get registrations with user details - REMOVE phone from selection
       const { data: registrations, error: regError } = await supabase
         .from("event_registrations")
-        .select(`
+        .select(
+          `
           registered_at,
           user:user_id(id, name, email, role, degree, company, specialization)
-        `)
+        `
+        )
         .eq("event_id", eventId);
 
       if (regError) throw regError;
@@ -772,7 +776,7 @@ router.get(
         registrations: registrations.map((reg) => ({
           name: reg.user.name,
           email: reg.user.email,
-          phone: "N/A",  // Default value since phone doesn't exist
+          phone: "N/A", // Default value since phone doesn't exist
           role: reg.user.role,
           specialization: reg.user.specialization || "N/A",
           degree: reg.user.degree || "N/A",
@@ -854,26 +858,28 @@ router.put("/events/:id/update", verifyToken, adminOnly, async (req, res) => {
 // Add this route before module.exports = router
 
 // Get a single event by ID (admin endpoint)
-router.get('/events/:id', verifyToken, adminOnly, async (req, res) => {
+router.get("/events/:id", verifyToken, adminOnly, async (req, res) => {
   try {
     const eventId = req.params.id;
-    
+
     // Get event details
     const { data: event, error: eventError } = await supabase
-      .from('events')
-      .select(`
+      .from("events")
+      .select(
+        `
         *,
         users:organizer_id(name, email, role)
-      `)
-      .eq('id', eventId)
+      `
+      )
+      .eq("id", eventId)
       .single();
-      
+
     if (eventError) throw eventError;
-    
+
     if (!event) {
-      return res.status(404).json({ message: 'Event not found' });
+      return res.status(404).json({ message: "Event not found" });
     }
-    
+
     // Format the event object to match frontend expectations
     const formattedEvent = {
       id: event.id,
@@ -897,7 +903,7 @@ router.get('/events/:id', verifyToken, adminOnly, async (req, res) => {
       tags: event.tags || [],
       speakers: event.speakers || [],
       sponsors: event.sponsors || [],
-      terms_and_conditions: event.terms_and_conditions || '',
+      terms_and_conditions: event.terms_and_conditions || "",
       created_at: event.created_at,
       verified_at: event.verified_at,
       admin_edited: event.admin_edited,
@@ -911,10 +917,10 @@ router.get('/events/:id', verifyToken, adminOnly, async (req, res) => {
           }
         : null,
     };
-    
+
     res.json(formattedEvent);
   } catch (error) {
-    console.error('Error fetching event details:', error);
+    console.error("Error fetching event details:", error);
     res.status(500).json({ message: error.message });
   }
 });
