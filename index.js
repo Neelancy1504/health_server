@@ -69,7 +69,7 @@ if (process.env.NODE_ENV !== 'production') {
     fs.mkdirSync(uploadsDir, { recursive: true });
   }
 }
-app.options('*', cors());
+// app.options('*', cors());
 // // Update your CORS configuration
 // app.use(
 //   cors({
