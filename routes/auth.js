@@ -5,6 +5,13 @@ const jwt = require("jsonwebtoken");
 const { supabase } = require("../config/supabase");
 const verifyToken = require("../middleware/authMiddleware");
 const verifyRole = require("../middleware/roleMiddleware");
+const { sendVerificationEmail } = require('../config/email');
+const { 
+  generateVerificationToken, 
+  storeVerificationToken,
+  verifyToken: verifyEmailToken // Rename this import to avoid the conflict
+} = require('../utils/tokenUtils');
+
 // Signup Route
 router.post("/signup", async (req, res) => {
   try {
@@ -16,8 +23,8 @@ router.post("/signup", async (req, res) => {
       degree,
       company,
       documents,
-      phone, // Add this
-      roleInCompany, // Add this
+      phone,
+      roleInCompany,
     } = req.body;
 
     // Check if user exists
@@ -39,7 +46,7 @@ router.post("/signup", async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Create user with the new fields
+    // Create user with email_verified set to false
     const { data: newUser, error: insertError } = await supabase
       .from("users")
       .insert({
@@ -49,22 +56,28 @@ router.post("/signup", async (req, res) => {
         role,
         degree: role === "doctor" ? degree : null,
         company: role === "pharma" ? company : null,
-        phone: phone || null, // Add this
-        role_in_company: role === "pharma" ? roleInCompany : null, // Add this
+        phone: phone || null,
+        role_in_company: role === "pharma" ? roleInCompany : null,
+        email_verified: false, // Initially set to false
       })
       .select()
       .single();
 
     if (insertError) throw new Error(insertError.message);
 
-    // Handle document uploads for doctors or pharma
+    // Generate and store verification token
+    const verificationToken = generateVerificationToken();
+    await storeVerificationToken(newUser.id, verificationToken);
+
+    // Send verification email
+    await sendVerificationEmail(newUser, verificationToken);
+
+    // Handle document uploads if provided
     if (
       (role === "doctor" || role === "pharma") &&
       documents &&
       documents.length > 0
     ) {
-      // Documents are already uploaded to storage at this point
-      // Just create references in the documents table
       const documentsToInsert = documents.map((doc) => ({
         user_id: newUser.id,
         name: doc.name,
@@ -84,9 +97,76 @@ router.post("/signup", async (req, res) => {
       }
     }
 
-    res.status(201).json({ message: "User registered successfully" });
+    res.status(201).json({
+      message:
+        "User registered successfully. Please check your email to verify your account.",
+    });
   } catch (error) {
     console.error("Signup error:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Add a new route for verifying email
+router.get("/verify-email", async (req, res) => {
+  try {
+    const { token } = req.query;
+
+    if (!token) {
+      return res
+        .status(400)
+        .json({ message: "No verification token provided" });
+    }
+
+    await verifyEmailToken(token);
+
+    // Redirect to the verification success page
+    //res.redirect(`${process.env.FRONTEND_URL}/verification-success`);
+    res.json({ success: true , message: "Email verified successfully" });
+  } catch (error) {
+    onsole.error("Email verification error:", error);
+    return res.status(400).json({ 
+      success: false, 
+      message: error.message || "Verification failed" 
+    });
+  }
+});
+
+// Add a route for resending verification emails
+router.post("/resend-verification", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    // Find user by email
+    const { data: user, error: userError } = await supabase
+      .from("users")
+      .select("*")
+      .eq("email", email)
+      .single();
+
+    if (userError || !user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Check if already verified
+    if (user.email_verified) {
+      return res.status(400).json({ message: "Email is already verified" });
+    }
+
+    // Generate new token
+    const verificationToken = generateVerificationToken();
+    await storeVerificationToken(user.id, verificationToken);
+
+    // Send verification email
+    await sendVerificationEmail(user, verificationToken);
+
+    res.json({ message: "Verification email sent successfully" });
+  } catch (error) {
+    console.error("Resend verification error:", error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -111,6 +191,16 @@ router.post("/login", async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(400).json({ message: "Invalid credentials" });
+    }
+
+    // Check if email is verified
+    if (!user.email_verified && user.role !== "admin") {
+      return res.status(403).json({
+        message:
+          "Email not verified. Please verify your email before logging in.",
+        needsVerification: true,
+        email: user.email,
+      });
     }
 
     // Create JWT token

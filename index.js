@@ -31,14 +31,14 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 // Update your CORS configuration
-app.use(
-  cors({
-    origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Range"],
-    exposedHeaders: ["Content-Length", "Content-Range", "Content-Disposition"],
-  })
-);
+// app.use(
+//   cors({
+//     origin: "*",
+//     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+//     allowedHeaders: ["Content-Type", "Authorization", "Range"],
+//     exposedHeaders: ["Content-Length", "Content-Range", "Content-Disposition"],
+//   })
+// );
 
 // Routes
 const authRoutes = require("./routes/auth");
@@ -59,7 +59,15 @@ if (process.env.NODE_ENV !== 'production') {
     fs.mkdirSync(uploadsDir, { recursive: true });
   }
 }
-
+// Update your CORS configuration
+app.use(
+  cors({
+    origin: ["https://health-verification.vercel.app", "http://localhost:3000", "*"], // Add your verification page URL
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Range"],
+    exposedHeaders: ["Content-Length", "Content-Range", "Content-Disposition"],
+  })
+);
 // Health check endpoint
 app.get("/api/health", (req, res) => {
   res.status(200).json({ status: "ok", message: "Server is running" });
