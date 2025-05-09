@@ -441,75 +441,131 @@ router.post("/:id/register", verifyToken, async (req, res) => {
   try {
     const eventId = req.params.id;
     const userId = req.user.id;
+    const registrationData = req.body || {};
 
-    // Check if event exists and is approved
+    console.log("Registration data received:", registrationData);
+
+    // Check if event exists
     const { data: event, error: eventError } = await supabase
       .from("events")
-      .select("status, capacity")
+      .select("*")
       .eq("id", eventId)
       .single();
-
+    console.log(
+      "Registration data received:",
+      JSON.stringify(registrationData)
+    );
+    console.log("isCompanySponsor value:", registrationData.isCompanySponsor);
+    console.log(
+      "Type of isCompanySponsor:",
+      typeof registrationData.isCompanySponsor
+    );
     if (eventError) throw eventError;
-
     if (!event) {
       return res.status(404).json({ message: "Event not found" });
     }
 
-    if (event.status !== "approved") {
-      return res
-        .status(400)
-        .json({ message: "Event is not open for registration" });
-    }
+    // Handle company sponsorship registration - use optional chaining to prevent errors
+if (registrationData.isCompanySponsor === true || registrationData.isCompanySponsor === "true") {
+  // Validate required fields
+  if (
+    !registrationData.companyName ||
+    !registrationData.contactPerson ||
+    !registrationData.email
+  ) {
+    return res.status(400).json({
+      message:
+        "Missing required sponsor information. Please provide company name, contact person, and email.",
+    });
+  }
 
-    // Check if already registered
-    const { data: existingRegistration, error: checkError } = await supabase
-      .from("event_registrations")
-      .select("*")
-      .eq("event_id", eventId)
-      .eq("user_id", userId)
-      .single();
+  // Add the company as a sponsor to the event
+  const newSponsor = {
+    id: Date.now().toString(),
+    name: registrationData.companyName,
+    level: registrationData.sponsorshipLevel || "Standard",
+    contactPerson: registrationData.contactPerson,
+    contactEmail: registrationData.email,
+    contactPhone: registrationData.phone || null,
+    website: registrationData.companyWebsite || null,
+    additionalNotes: registrationData.additionalNotes || null,
+    registered_at: new Date().toISOString(),
+    registered_by: userId,
+  };
 
-    if (checkError && !checkError.code.includes("PGRST116")) {
-      throw checkError;
-    }
+  // Get current sponsors array and add the new one
+  let currentSponsors = event.sponsors || [];
+  currentSponsors = [...currentSponsors, newSponsor];
 
-    if (existingRegistration) {
-      return res
-        .status(400)
-        .json({ message: "Already registered for this event" });
-    }
+  // Update the event with the new sponsor
+  const { error: updateError } = await supabase
+    .from("events")
+    .update({
+      sponsors: currentSponsors,
+    })
+    .eq("id", eventId);
 
-    // Check capacity if set
-    if (event.capacity) {
-      const { count, error: countError } = await supabase
+  if (updateError) throw updateError;
+
+  // Also create a registration record to track attendance
+  // Only use fields that exist in the schema
+  const registrationRecord = {
+    event_id: eventId,
+    user_id: userId,
+    registered_at: new Date().toISOString(),
+    is_sponsor: true,  // Explicitly set to boolean true
+    company_name: registrationData.companyName,
+    sponsorship_level: registrationData.sponsorshipLevel || "Standard",
+  };
+  
+  console.log("Inserting registration with is_sponsor:", registrationRecord.is_sponsor);
+  
+  const { error: regError } = await supabase
+    .from("event_registrations")
+    .insert(registrationRecord);
+
+  if (regError) throw regError;
+
+  return res.status(200).json({
+    message: "Company registered as sponsor successfully",
+    sponsor: newSponsor,
+  });
+}
+
+    // Handle regular individual registration
+    else {
+      // Check if already registered
+      const { data: existingReg, error: checkError } = await supabase
         .from("event_registrations")
-        .select("*", { count: "exact", head: true })
-        .eq("event_id", eventId);
+        .select("*")
+        .eq("event_id", eventId)
+        .eq("user_id", userId)
+        .limit(1);
 
-      if (countError) throw countError;
+      if (checkError) throw checkError;
 
-      if (count >= event.capacity) {
+      if (existingReg && existingReg.length > 0) {
         return res
           .status(400)
-          .json({ message: "Event has reached maximum capacity" });
+          .json({ message: "You have already registered for this event" });
       }
+
+      // Only use fields that exist in the schema
+      const { error: regError } = await supabase
+        .from("event_registrations")
+        .insert({
+          event_id: eventId,
+          user_id: userId,
+          registered_at: new Date().toISOString(),
+          is_sponsor: false,
+        });
+
+      if (regError) throw regError;
+
+      return res.status(200).json({ message: "Registration successful" });
     }
-
-    // Create registration
-    const { data, error: regError } = await supabase
-      .from("event_registrations")
-      .insert({
-        event_id: eventId,
-        user_id: userId,
-        registered_at: new Date().toISOString(),
-      })
-      .select();
-
-    if (regError) throw regError;
-
-    res.status(201).json({ message: "Successfully registered for the event" });
   } catch (error) {
-    console.error("Error registering for event:", error);
+    console.error("Registration error:", error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -548,11 +604,9 @@ router.put("/:id", verifyToken, async (req, res) => {
 
     // For regular users, restrict editing of approved events
     if (req.user.role !== "admin" && event.status === "approved") {
-      return res
-        .status(403)
-        .json({
-          message: "Cannot edit an event that has already been approved",
-        });
+      return res.status(403).json({
+        message: "Cannot edit an event that has already been approved",
+      });
     }
 
     // Base fields that anyone can update

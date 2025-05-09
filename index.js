@@ -61,7 +61,8 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/events", eventRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/uploads", uploadRoutes);
-
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 // Create an uploads directory
 if (process.env.NODE_ENV !== 'production') {
   const uploadsDir = path.join(__dirname, "uploads");

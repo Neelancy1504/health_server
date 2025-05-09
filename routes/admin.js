@@ -658,47 +658,25 @@ router.get("/events", verifyToken, adminOnly, async (req, res) => {
 router.get(
   "/events/:id/registrations",
   verifyToken,
-  adminOnly,
+  verifyRole(["admin"]),
   async (req, res) => {
     try {
       const eventId = req.params.id;
 
-      // Get event details first
-      const { data: event, error: eventError } = await supabase
-        .from("events")
-        .select("*")
-        .eq("id", eventId)
-        .single();
-
-      if (eventError) throw eventError;
-
-      if (!event) {
-        return res.status(404).json({ message: "Event not found" });
-      }
-
-      // Get registrations with user details - REMOVE phone from selection
-      const { data: registrations, error: regError } = await supabase
+      // Get registrations with user details - Remove specialization from selection
+      const { data: registrations, error } = await supabase
         .from("event_registrations")
         .select(
           `
           *,
-          user:user_id(id, name, email, role, degree, company)
+          user:user_id (id, name, email, phone, role, company)
         `
         )
         .eq("event_id", eventId);
 
-      if (regError) throw regError;
+      if (error) throw error;
 
-      // Add phone property with default value for compatibility with frontend
-      const formattedRegistrations = registrations.map((reg) => ({
-        ...reg,
-        user: {
-          ...reg.user,
-          phone: reg.user.phone || "Not provided", // Set default value
-        },
-      }));
-
-      res.json(formattedRegistrations);
+      res.json(registrations);
     } catch (error) {
       console.error("Error fetching event registrations:", error);
       res.status(500).json({ message: error.message });
@@ -732,7 +710,7 @@ router.delete(
   }
 );
 
-// Export registrations for an event (generates CSV data)
+// Update the export registrations endpoint
 router.get(
   "/events/:id/registrations/export",
   verifyToken,
@@ -754,13 +732,13 @@ router.get(
         return res.status(404).json({ message: "Event not found" });
       }
 
-      // Get registrations with user details - REMOVE phone from selection
+      // Get registrations with user details - Remove specialization from selection
       const { data: registrations, error: regError } = await supabase
         .from("event_registrations")
         .select(
           `
-          registered_at,
-          user:user_id(id, name, email, role, degree, company, specialization)
+          *,
+          user:user_id (id, name, email, role, company, phone)
         `
         )
         .eq("event_id", eventId);
@@ -774,14 +752,17 @@ router.get(
         registrationsCount: registrations.length,
         exportDate: new Date().toISOString(),
         registrations: registrations.map((reg) => ({
-          name: reg.user.name,
-          email: reg.user.email,
-          phone: "N/A", // Default value since phone doesn't exist
-          role: reg.user.role,
-          specialization: reg.user.specialization || "N/A",
-          degree: reg.user.degree || "N/A",
-          company: reg.user.company || "N/A",
-          registeredAt: reg.registered_at,
+          name: reg.user?.name || "Unknown",
+          email: reg.user?.email || "Unknown",
+          phone: reg.user?.phone || "N/A",
+          role: reg.user?.role || "N/A",
+          company: reg.is_sponsor
+            ? reg.company_name
+            : reg.user?.company || "N/A",
+          registered_at: reg.registered_at,
+          is_sponsor: reg.is_sponsor || false,
+          company_name: reg.company_name || "N/A",
+          sponsorship_level: reg.sponsorship_level || "N/A",
         })),
       };
 
