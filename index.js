@@ -37,7 +37,7 @@ app.use(
     exposedHeaders: ["Content-Length", "Content-Range", "Content-Disposition"],
     credentials: true,
     preflightContinue: false,
-    optionsSuccessStatus: 204
+    optionsSuccessStatus: 204,
   })
 );
 // Update your CORS configuration
@@ -66,7 +66,7 @@ app.use("/api/uploads", uploadRoutes);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 // Create an uploads directory
-if (process.env.NODE_ENV !== 'production') {
+if (process.env.NODE_ENV !== "production") {
   const uploadsDir = path.join(__dirname, "uploads");
   if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
@@ -194,7 +194,13 @@ app.post("/api/messages", async (req, res) => {
       sender_name: messageData.sender_name,
       receiver_id: messageData.receiver_id,
       room_id: messageData.room_id,
-      // created_at is handled automatically by Supabase
+      // Add file attachment fields
+      is_attachment: messageData.isAttachment || false,
+      attachment_type: messageData.attachmentType,
+      file_url: messageData.fileUrl,
+      file_name: messageData.fileName,
+      file_type: messageData.fileType,
+      file_size: messageData.fileSize,
     };
 
     console.log("Inserting message into Supabase:", messageToInsert);
@@ -226,6 +232,13 @@ app.post("/api/messages", async (req, res) => {
         created_at: savedMessage.created_at,
         roomId: savedMessage.room_id,
         room_id: savedMessage.room_id,
+        // Add attachment fields to emitted message
+        isAttachment: savedMessage.is_attachment,
+        attachmentType: savedMessage.attachment_type,
+        fileUrl: savedMessage.file_url,
+        fileName: savedMessage.file_name,
+        fileType: savedMessage.file_type,
+        fileSize: savedMessage.file_size,
       };
 
       io.to(savedMessage.room_id).emit("receive_message", messageToEmit);
@@ -260,6 +273,7 @@ io.on("connection", (socket) => {
     console.log(`User ${socket.id} joined room: ${roomId}`);
   });
 
+  // Update the socket handler for messages
   socket.on("send_message", async (messageData) => {
     console.log("Message received via socket:", messageData);
 
@@ -271,7 +285,13 @@ io.on("connection", (socket) => {
         sender_name: messageData.sender_name || messageData.senderName,
         receiver_id: messageData.receiver_id || messageData.receiverId,
         room_id: messageData.room_id || messageData.roomId,
-        // created_at is handled automatically by Supabase
+        // Add file attachment fields
+        is_attachment: messageData.isAttachment || false,
+        attachment_type: messageData.attachmentType,
+        file_url: messageData.fileUrl,
+        file_name: messageData.fileName,
+        file_type: messageData.fileType,
+        file_size: messageData.fileSize,
       };
 
       // Insert message into Supabase
@@ -301,6 +321,13 @@ io.on("connection", (socket) => {
           created_at: savedMessage.created_at,
           roomId: savedMessage.room_id,
           room_id: savedMessage.room_id,
+          // Add attachment fields to emitted message
+          isAttachment: savedMessage.is_attachment,
+          attachmentType: savedMessage.attachment_type,
+          fileUrl: savedMessage.file_url,
+          fileName: savedMessage.file_name,
+          fileType: savedMessage.file_type,
+          fileSize: savedMessage.file_size,
         };
 
         // Include the original sender's socket ID to prevent duplicate messages
