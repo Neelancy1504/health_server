@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const verifyToken = require("../middleware/authMiddleware");
+const verifyRole = require("../middleware/roleMiddleware"); 
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
@@ -326,5 +327,120 @@ router.get("/pdf/:filename", async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 });
+
+// Course video upload route - Updated to use supabaseAdmin
+router.post(
+  '/course-video',
+  verifyToken,
+  verifyRole(['admin', 'doctor']),
+  async (req, res) => {
+    try {
+      if (!req.files || !req.files.file) {
+        return res.status(400).json({ message: 'No file uploaded' });
+      }
+
+      const userId = req.user.id;
+      const file = req.files.file;
+      const fileExtension = path.extname(file.name);
+      const fileName = `${uuidv4()}${fileExtension}`;
+      const filePath = `courses/videos/${userId}/${fileName}`;
+
+      // Using supabaseAdmin instead of supabase to bypass RLS
+      const { data, error } = await supabaseAdmin.storage
+        .from('medevents')
+        .upload(filePath, file.data, {
+          contentType: file.mimetype,
+          cacheControl: '3600',
+          upsert: true, // Changed to true for better overwrite handling
+        });
+
+      if (error) {
+        console.error('Storage upload error:', error);
+        return res.status(500).json({
+          message: 'Failed to upload file',
+          error: error.message
+        });
+      }
+
+      // Get public URL - also using supabaseAdmin for consistency
+      const { data: urlData } = supabaseAdmin.storage
+        .from('medevents')
+        .getPublicUrl(filePath);
+
+      res.status(200).json({
+        success: true,
+        url: urlData.publicUrl,
+        fileName: file.name,
+        fileType: file.mimetype,
+        size: file.size,
+      });
+    } catch (error) {
+      console.error('Course video upload error:', error);
+      res.status(500).json({ message: error.message });
+    }
+  }
+);
+
+// Course thumbnail upload route - Updated to use supabaseAdmin
+router.post(
+  '/course-thumbnail',
+  verifyToken,
+  verifyRole(['admin', 'doctor']),
+  async (req, res) => {
+    try {
+      // Debug auth information
+      console.log('Authenticated user:', req.user);
+      
+      if (!req.files || !req.files.file) {
+        return res.status(400).json({ message: 'No file uploaded' });
+      }
+
+      const userId = req.user.id;
+      const file = req.files.file;
+      const fileExtension = path.extname(file.name);
+      const fileName = `${uuidv4()}${fileExtension}`;
+      const filePath = `courses/thumbnails/${userId}/${fileName}`;
+
+      console.log(`Attempting to upload to path: ${filePath}`);
+      console.log(`User ID: ${userId}, Role: ${req.user.role}`);
+
+      // Using supabaseAdmin instead of supabase to bypass RLS
+      const { data, error } = await supabaseAdmin.storage
+        .from('medevents')
+        .upload(filePath, file.data, {
+          contentType: file.mimetype,
+          cacheControl: '3600',
+          upsert: true,
+        });
+
+      if (error) {
+        console.error('Storage upload error:', error);
+        return res.status(500).json({
+          message: 'Failed to upload file',
+          error: error.message
+        });
+      }
+
+      // Get public URL - also using supabaseAdmin for consistency
+      const { data: urlData } = supabaseAdmin.storage
+        .from('medevents')
+        .getPublicUrl(filePath);
+
+      res.status(200).json({
+        success: true,
+        url: urlData.publicUrl,
+        fileName: file.name,
+        fileType: file.mimetype,
+        size: file.size,
+      });
+    } catch (error) {
+      console.error('Course thumbnail upload error:', error);
+      res.status(500).json({ 
+        message: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined 
+      });
+    }
+  }
+);
 
 module.exports = router;

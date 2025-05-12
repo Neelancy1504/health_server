@@ -5,6 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const http = require("http");
 const { Server } = require("socket.io");
+const fileUpload = require('express-fileupload');
 
 // Make sure to load environment variables right away
 dotenv.config();
@@ -40,15 +41,11 @@ app.use(
     optionsSuccessStatus: 204,
   })
 );
-// Update your CORS configuration
-// app.use(
-//   cors({
-//     origin: "*",
-//     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-//     allowedHeaders: ["Content-Type", "Authorization", "Range"],
-//     exposedHeaders: ["Content-Length", "Content-Range", "Content-Disposition"],
-//   })
-// );
+app.use(fileUpload({
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB max file size
+  useTempFiles: true,
+  tempFileDir: '/tmp/'
+}));
 
 // Routes
 const authRoutes = require("./routes/auth");
@@ -56,6 +53,7 @@ const adminRoutes = require("./routes/admin");
 const eventRoutes = require("./routes/events");
 const userRoutes = require("./routes/users");
 const uploadRoutes = require("./routes/uploads");
+const coursesRoutes = require("./routes/courses");
 const privateMeetingsRoutes = require("./routes/private-meetings");
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
@@ -63,6 +61,7 @@ app.use("/api/events", eventRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/private-meetings", privateMeetingsRoutes);
 app.use("/api/uploads", uploadRoutes);
+app.use("/api/courses", coursesRoutes);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 // Create an uploads directory
