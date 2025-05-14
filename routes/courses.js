@@ -9,10 +9,12 @@ router.get("/", async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("courses")
-      .select(`
+      .select(
+        `
         *,
         videos:course_videos(*)
-      `)
+      `
+      )
       .order("created_at", { ascending: false });
 
     if (error) throw error;
@@ -31,10 +33,12 @@ router.get("/:id", async (req, res) => {
 
     const { data, error } = await supabase
       .from("courses")
-      .select(`
+      .select(
+        `
         *,
         videos:course_videos(*)
-      `)
+      `
+      )
       .eq("id", id)
       .single();
 
@@ -53,15 +57,15 @@ router.get("/:id", async (req, res) => {
 
 // Create a new course (admin or doctor)
 router.post(
-  '/',
+  "/",
   verifyToken,
-  verifyRole(['admin', 'doctor']),
+  verifyRole(["admin", "doctor"]),
   async (req, res) => {
     try {
       const { title, description, category, level, price, isPaid } = req.body;
 
       if (!title) {
-        return res.status(400).json({ message: 'Course title is required' });
+        return res.status(400).json({ message: "Course title is required" });
       }
 
       // Get user details to ensure we have a name
@@ -70,17 +74,19 @@ router.post(
         .select("name")
         .eq("id", req.user.id)
         .single();
-        
+
       if (userError) {
         console.error("Error fetching user data:", userError);
-        return res.status(500).json({ message: "Failed to retrieve user information" });
+        return res
+          .status(500)
+          .json({ message: "Failed to retrieve user information" });
       }
-      
-      const creatorName = userData?.name || 'Unknown User';
+
+      const creatorName = userData?.name || "Unknown User";
       console.log("Creating course with creator name:", creatorName);
 
       const { data, error } = await supabase
-        .from('courses')
+        .from("courses")
         .insert({
           title,
           description,
@@ -89,7 +95,7 @@ router.post(
           creator_name: creatorName, // Use the retrieved name
           tags: req.body.tags || [],
           thumbnail_url: req.body.thumbnail_url || null,
-          status: req.body.status || 'published'
+          status: req.body.status || "published",
         })
         .select();
 
@@ -97,7 +103,7 @@ router.post(
 
       res.status(201).json(data[0]);
     } catch (error) {
-      console.error('Error creating course:', error);
+      console.error("Error creating course:", error);
       res.status(500).json({ message: error.message });
     }
   }
@@ -111,22 +117,40 @@ router.post(
   async (req, res) => {
     try {
       const { id } = req.params;
-      const { title, description, video_url, thumbnail_url, sequence_order, duration } =
-        req.body;
+      const {
+        title,
+        description,
+        video_url,
+        thumbnail_url,
+        sequence_order,
+        duration,
+      } = req.body;
 
-      // Verify course exists and belongs to user (if not admin)
+      console.log(
+        `Attempting to add video to course ${id} by user ${req.user.id}`
+      );
+
+      // FIXED: Use correct field names (creator_id instead of creater_id)
       const { data: course, error: courseError } = await supabase
         .from("courses")
-        .select("id, creater_id")
+        .select("id, creator_id")
         .eq("id", id)
         .single();
 
-      if (courseError || !course) {
+      if (courseError) {
+        console.error("Error fetching course:", courseError);
         return res.status(404).json({ message: "Course not found" });
       }
 
-      // Check if user is authorized to add videos to this course
-      if (req.user.role !== "admin" && course.created_by !== req.user.id) {
+      if (!course) {
+        console.error(`Course with ID ${id} not found`);
+        return res.status(404).json({ message: "Course not found" });
+      }
+
+      console.log("Course found:", course);
+
+      // FIXED: Match the field name with what's in the database (creator_id)
+      if (req.user.role !== "admin" && course.creator_id !== req.user.id) {
         return res.status(403).json({
           message: "You are not authorized to add videos to this course",
         });
@@ -146,7 +170,10 @@ router.post(
         })
         .select();
 
-      if (error) throw error;
+      if (error) {
+        console.error("Error inserting video:", error);
+        throw error;
+      }
 
       res.status(201).json(data[0]);
     } catch (error) {

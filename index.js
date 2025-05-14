@@ -5,7 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const http = require("http");
 const { Server } = require("socket.io");
-const fileUpload = require('express-fileupload');
+const fileUpload = require("express-fileupload");
 
 // Make sure to load environment variables right away
 dotenv.config();
@@ -41,11 +41,17 @@ app.use(
     optionsSuccessStatus: 204,
   })
 );
-app.use(fileUpload({
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB max file size
-  useTempFiles: true,
-  tempFileDir: '/tmp/'
-}));
+app.use(
+  fileUpload({
+    limits: { fileSize: 500 * 1024 * 1024 }, // 500MB max file size
+    useTempFiles: true,
+    tempFileDir: "/tmp/",
+    abortOnLimit: false,
+    createParentPath: true,
+    debug: true, // Enable debug for troubleshooting
+    parseNested: false, // Simplify parsing
+  })
+);
 
 // Routes
 const authRoutes = require("./routes/auth");

@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const verifyToken = require("../middleware/authMiddleware");
-const verifyRole = require("../middleware/roleMiddleware"); 
+const verifyRole = require("../middleware/roleMiddleware");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
@@ -11,9 +11,9 @@ const { supabase, supabaseAdmin } = require("../config/supabase"); // Add this l
 // Configure storage for temporary file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    if (process.env.NODE_ENV === 'production') {
+    if (process.env.NODE_ENV === "production") {
       // In production (Vercel), use memory storage
-      cb(null, '/tmp'); // Vercel allows writing to /tmp
+      cb(null, "/tmp"); // Vercel allows writing to /tmp
     } else {
       // In development, use disk storage
       const uploadDir = path.join(__dirname, "../uploads");
@@ -328,117 +328,192 @@ router.get("/pdf/:filename", async (req, res) => {
   }
 });
 
-// Course video upload route - Updated to use supabaseAdmin
+// Course video upload route - More robust error handling
 router.post(
-  '/course-video',
+  "/course-video",
   verifyToken,
-  verifyRole(['admin', 'doctor']),
+  verifyRole(["admin", "doctor"]),
   async (req, res) => {
     try {
+      console.log(
+        "Video upload request received from user:",
+        req.user.id,
+        req.user.role
+      );
+
       if (!req.files || !req.files.file) {
-        return res.status(400).json({ message: 'No file uploaded' });
+        return res.status(400).json({ message: "No file uploaded" });
       }
 
-      const userId = req.user.id;
       const file = req.files.file;
+
+      // Log detailed information about the received file
+      console.log("Video file received:", {
+        name: file.name,
+        size: file.size,
+        mimetype: file.mimetype,
+        md5: file.md5,
+        tempFilePath: file.tempFilePath || "none",
+      });
+
+      const userId = req.user.id;
       const fileExtension = path.extname(file.name);
       const fileName = `${uuidv4()}${fileExtension}`;
       const filePath = `courses/videos/${userId}/${fileName}`;
 
-      // Using supabaseAdmin instead of supabase to bypass RLS
+      // Upload to Supabase Storage using file path instead of buffer
+      let fileData;
+      if (file.tempFilePath) {
+        // If express-fileupload stored it as a temp file
+        fileData = fs.readFileSync(file.tempFilePath);
+      } else {
+        // If express-fileupload has it in memory
+        fileData = file.data;
+      }
+
+      // Check data size
+      console.log("File data size:", fileData?.length || 0);
+      if (!fileData || fileData.length === 0) {
+        return res.status(400).json({ message: "File data is empty" });
+      }
+
+      // Upload to Supabase
       const { data, error } = await supabaseAdmin.storage
-        .from('medevents')
-        .upload(filePath, file.data, {
-          contentType: file.mimetype,
-          cacheControl: '3600',
-          upsert: true, // Changed to true for better overwrite handling
+        .from("medevents")
+        .upload(filePath, fileData, {
+          contentType: file.mimetype || "video/mp4",
+          cacheControl: "3600",
+          upsert: true,
         });
 
       if (error) {
-        console.error('Storage upload error:', error);
+        console.error("Supabase storage error:", error);
         return res.status(500).json({
-          message: 'Failed to upload file',
-          error: error.message
+          message: "Failed to upload to storage",
+          error: error.message,
         });
       }
 
-      // Get public URL - also using supabaseAdmin for consistency
-      const { data: urlData } = supabaseAdmin.storage
-        .from('medevents')
+      // Get the public URL
+      const { data: publicUrlData } = supabaseAdmin.storage
+        .from("medevents")
         .getPublicUrl(filePath);
+
+      const url = publicUrlData.publicUrl;
+
+      // Clean up temp file if it exists
+      if (file.tempFilePath && fs.existsSync(file.tempFilePath)) {
+        fs.unlinkSync(file.tempFilePath);
+      }
 
       res.status(200).json({
         success: true,
-        url: urlData.publicUrl,
+        url,
         fileName: file.name,
         fileType: file.mimetype,
         size: file.size,
       });
     } catch (error) {
-      console.error('Course video upload error:', error);
+      console.error("Course video upload error:", error);
       res.status(500).json({ message: error.message });
     }
   }
 );
 
-// Course thumbnail upload route - Updated to use supabaseAdmin
+// Course thumbnail upload route
 router.post(
-  '/course-thumbnail',
+  "/course-thumbnail",
   verifyToken,
-  verifyRole(['admin', 'doctor']),
+  verifyRole(["admin", "doctor"]),
   async (req, res) => {
     try {
-      // Debug auth information
-      console.log('Authenticated user:', req.user);
-      
-      if (!req.files || !req.files.file) {
-        return res.status(400).json({ message: 'No file uploaded' });
+      console.log("Thumbnail upload request received", {
+        userId: req.user.id,
+        role: req.user.role,
+        hasFiles: !!req.files,
+        contentType: req.headers["content-type"],
+      });
+
+      // Make sure files were uploaded
+      if (!req.files || Object.keys(req.files).length === 0) {
+        return res.status(400).json({ message: "No files were uploaded" });
       }
 
-      const userId = req.user.id;
+      // Get the file with key 'file'
       const file = req.files.file;
-      const fileExtension = path.extname(file.name);
+      if (!file) {
+        return res
+          .status(400)
+          .json({ message: "File must be provided with the key 'file'" });
+      }
+
+      // Log detailed file information for debugging
+      console.log("Thumbnail file received:", {
+        name: file.name,
+        size: file.size,
+        mimetype: file.mimetype,
+        tempFilePath: file.tempFilePath || "N/A",
+        md5: file.md5,
+      });
+
+      const userId = req.user.id;
+      const fileExtension = path.extname(file.name) || ".jpg";
       const fileName = `${uuidv4()}${fileExtension}`;
       const filePath = `courses/thumbnails/${userId}/${fileName}`;
 
-      console.log(`Attempting to upload to path: ${filePath}`);
-      console.log(`User ID: ${userId}, Role: ${req.user.role}`);
+      // Create parent directory structure if it doesn't exist
+      const dirPath = path.dirname(filePath);
 
-      // Using supabaseAdmin instead of supabase to bypass RLS
+      // Get file data from tempFilePath if available, otherwise use data property
+      let fileData;
+      if (file.tempFilePath) {
+        fileData = fs.readFileSync(file.tempFilePath);
+      } else {
+        fileData = file.data;
+      }
+
+      // Check file data is present
+      if (!fileData || fileData.length === 0) {
+        return res.status(400).json({ message: "File data is empty" });
+      }
+
+      // Upload to Supabase
       const { data, error } = await supabaseAdmin.storage
-        .from('medevents')
-        .upload(filePath, file.data, {
-          contentType: file.mimetype,
-          cacheControl: '3600',
+        .from("medevents")
+        .upload(filePath, fileData, {
+          contentType: file.mimetype || "image/jpeg",
+          cacheControl: "3600",
           upsert: true,
         });
 
       if (error) {
-        console.error('Storage upload error:', error);
+        console.error("Supabase storage error:", error);
         return res.status(500).json({
-          message: 'Failed to upload file',
-          error: error.message
+          message: "Failed to upload to storage",
+          error: error.message,
         });
       }
 
-      // Get public URL - also using supabaseAdmin for consistency
-      const { data: urlData } = supabaseAdmin.storage
-        .from('medevents')
+      // Get public URL
+      const { data: publicUrlData } = supabaseAdmin.storage
+        .from("medevents")
         .getPublicUrl(filePath);
+
+      // Clean up temp file if it exists
+      if (file.tempFilePath && fs.existsSync(file.tempFilePath)) {
+        fs.unlinkSync(file.tempFilePath);
+      }
 
       res.status(200).json({
         success: true,
-        url: urlData.publicUrl,
+        url: publicUrlData.publicUrl,
         fileName: file.name,
         fileType: file.mimetype,
         size: file.size,
       });
     } catch (error) {
-      console.error('Course thumbnail upload error:', error);
-      res.status(500).json({ 
-        message: error.message,
-        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined 
-      });
+      console.error("Course thumbnail upload error:", error);
+      res.status(500).json({ message: error.message });
     }
   }
 );
