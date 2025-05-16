@@ -518,4 +518,97 @@ router.post(
   }
 );
 
+// Add this route near your other upload routes
+
+// Chat document upload endpoint - using express-fileupload
+router.post("/chat-document", verifyToken, async (req, res) => {
+  try {
+    console.log("Chat file upload request received", {
+      userId: req.user.id,
+      hasFiles: !!req.files,
+      contentType: req.headers["content-type"],
+    });
+
+    // Make sure files were uploaded
+    if (!req.files || Object.keys(req.files).length === 0) {
+      return res.status(400).json({ message: "No files were uploaded" });
+    }
+
+    // Get the file with key 'document'
+    const file = req.files.document;
+    if (!file) {
+      return res.status(400).json({
+        message: "File must be provided with the key 'document'",
+      });
+    }
+
+    // Log detailed file information for debugging
+    console.log("Chat file received:", {
+      name: file.name,
+      size: file.size,
+      mimetype: file.mimetype,
+      tempFilePath: file.tempFilePath || "N/A",
+      md5: file.md5,
+    });
+
+    const userId = req.user.id;
+    const fileExtension =
+      path.extname(file.name) || `.${file.mimetype.split("/")[1]}`;
+    const fileName = `${uuidv4()}${fileExtension}`;
+    const filePath = `chat/${userId}/${fileName}`;
+
+    // Get file data from tempFilePath if available, otherwise use data property
+    let fileData;
+    if (file.tempFilePath) {
+      fileData = fs.readFileSync(file.tempFilePath);
+    } else {
+      fileData = file.data;
+    }
+
+    // Check file data is present
+    if (!fileData || fileData.length === 0) {
+      return res.status(400).json({ message: "File data is empty" });
+    }
+
+    // Upload to Supabase
+    const { data, error } = await supabaseAdmin.storage
+      .from("medevents")
+      .upload(filePath, fileData, {
+        contentType: file.mimetype || "application/octet-stream",
+        cacheControl: "3600",
+        upsert: true,
+      });
+
+    if (error) {
+      console.error("Supabase storage error:", error);
+      return res.status(500).json({
+        message: "Failed to upload to storage",
+        error: error.message,
+      });
+    }
+
+    // Get public URL
+    const { data: publicUrlData } = supabaseAdmin.storage
+      .from("medevents")
+      .getPublicUrl(filePath);
+
+    // Clean up temp file if it exists
+    if (file.tempFilePath && fs.existsSync(file.tempFilePath)) {
+      fs.unlinkSync(file.tempFilePath);
+    }
+
+    res.status(200).json({
+      success: true,
+      url: publicUrlData.publicUrl,
+      fileName: file.name,
+      fileType: file.mimetype,
+      size: file.size,
+      storage_path: filePath,
+    });
+  } catch (error) {
+    console.error("Chat file upload error:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
 module.exports = router;
