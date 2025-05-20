@@ -576,7 +576,7 @@ app.get("/api/user-profile/:userId", async (req, res) => {
     const { data, error } = await supabase
       .from("users")
       .select(
-        "id, name, email, role, avatar_url, degree, achievements, specialization, created_at"
+        "id, name, email, role, avatar_url, degree, achievements, created_at"
       )
       .eq("id", userId)
       .single();

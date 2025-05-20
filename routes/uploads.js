@@ -518,7 +518,104 @@ router.post(
   }
 );
 
-// Add this route near your other upload routes
+// Profile image upload route
+router.post("/profile-image", verifyToken, async (req, res) => {
+  try {
+    // Make sure files were uploaded
+    if (!req.files || !req.files.profile_image) {
+      return res.status(400).json({ message: "No profile image uploaded" });
+    }
+
+    const file = req.files.profile_image;
+    const userId = req.user.id;
+    
+    // First, get the current user to find existing avatar_url
+    const { data: userData, error: userError } = await supabase
+      .from("users")
+      .select("avatar_url")
+      .eq("id", userId)
+      .single();
+      
+    if (!userError && userData?.avatar_url) {
+      // Extract storage path from the URL
+      try {
+        const url = new URL(userData.avatar_url);
+        const pathParts = url.pathname.split('/');
+        const storagePath = pathParts.slice(pathParts.indexOf('medevents') + 1).join('/');
+        
+        if (storagePath) {
+          // Delete the old image from storage
+          console.log(`Deleting old profile image: ${storagePath}`);
+          await supabaseAdmin.storage
+            .from("medevents")
+            .remove([storagePath]);
+        }
+      } catch (deleteError) {
+        console.error("Error deleting old profile image:", deleteError);
+        // Continue with upload even if delete fails
+      }
+    }
+    
+    // Generate unique filename
+    const fileExtension = path.extname(file.name) || ".jpg";
+    const fileName = `profile-${Date.now()}${fileExtension}`;
+    const filePath = `profiles/${userId}/${fileName}`;
+
+    // Get file data
+    let fileData;
+    if (file.tempFilePath) {
+      fileData = fs.readFileSync(file.tempFilePath);
+    } else {
+      fileData = file.data;
+    }
+
+    // Upload to storage
+    const { data, error } = await supabaseAdmin.storage
+      .from("medevents")
+      .upload(filePath, fileData, {
+        contentType: file.mimetype || "image/jpeg",
+        cacheControl: "3600",
+        upsert: true,
+      });
+
+    if (error) {
+      return res.status(500).json({
+        message: "Failed to upload profile image",
+        error: error.message,
+      });
+    }
+
+    // Get the public URL
+    const { data: publicUrlData } = supabaseAdmin.storage
+      .from("medevents")
+      .getPublicUrl(filePath);
+
+    const avatarUrl = publicUrlData.publicUrl;
+
+    // Update user record with avatar URL
+    const { error: updateError } = await supabase
+      .from("users")
+      .update({ avatar_url: avatarUrl })
+      .eq("id", userId);
+
+    if (updateError) {
+      return res.status(500).json({
+        message: "Failed to update user profile",
+        error: updateError.message,
+      });
+    }
+
+    // Return success response
+    res.status(200).json({
+      success: true,
+      avatar_url: avatarUrl,
+    });
+  } catch (error) {
+    console.error("Profile image upload error:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
 
 // Chat document upload endpoint - using express-fileupload
 router.post("/chat-document", verifyToken, async (req, res) => {

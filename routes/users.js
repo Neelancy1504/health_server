@@ -55,4 +55,41 @@ router.post('/documents', verifyToken, async (req, res) => {
   }
 });
 
+// Add this to your users.js routes file
+
+// Get the current user's profile
+router.get("/profile-image", verifyToken, async (req, res) => {
+  // This route will forward the request to the correct endpoint
+  const userId = req.user.id;
+  
+  try {
+    // Get current user from database
+    const { data, error } = await supabase
+      .from("users")
+      .select("*")
+      .eq("id", userId)
+      .single();
+      
+    if (error) throw error;
+    
+    res.json(data);
+  } catch (error) {
+    console.error("Error getting user profile:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Add a route that forwards the profile image upload
+router.post("/profile-image", verifyToken, async (req, res) => {
+  // Forward to the correct endpoint
+  try {
+    // Forward the request to the uploads router
+    // You would need to implement proper forwarding here
+    // This is a simplified example
+    res.redirect(307, "/api/uploads/profile-image");
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 module.exports = router;
