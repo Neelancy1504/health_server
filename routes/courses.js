@@ -347,4 +347,114 @@ router.delete(
   }
 );
 
+// Get discussions for a course
+router.get("/:courseId/discussions", async (req, res) => {
+  try {
+    const { courseId } = req.params;
+
+    const { data, error } = await supabase
+      .from("course_discussions")
+      .select("*, user:user_id(name, role)")
+      .eq("course_id", courseId)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    // Format the response to include user data
+    const formattedDiscussions = data.map((discussion) => ({
+      id: discussion.id,
+      content: discussion.content,
+      created_at: discussion.created_at,
+      user_id: discussion.user_id,
+      user_name: discussion.user?.name || "Unknown User",
+      role: discussion.user?.role,
+    }));
+
+    res.json(formattedDiscussions);
+  } catch (error) {
+    console.error("Error fetching course discussions:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Add a discussion to a course
+router.post("/:courseId/discussions", verifyToken, async (req, res) => {
+  try {
+    const { courseId } = req.params;
+    const { content } = req.body;
+    const userId = req.user.id;
+
+    // Get user information
+    const { data: userData, error: userError } = await supabase
+      .from("users")
+      .select("name")
+      .eq("id", userId)
+      .single();
+
+    if (userError) {
+      console.error("Error fetching user data:", userError);
+      return res
+        .status(500)
+        .json({ message: "Failed to retrieve user information" });
+    }
+
+    const { data, error } = await supabase
+      .from("course_discussions")
+      .insert({
+        course_id: courseId,
+        user_id: userId,
+        content,
+      })
+      .select();
+
+    if (error) throw error;
+
+    res.status(201).json(data[0]);
+  } catch (error) {
+    console.error("Error adding course discussion:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Delete a discussion from a course
+router.delete(
+  "/:courseId/discussions/:discussionId",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const { discussionId } = req.params;
+      const userId = req.user.id;
+
+      // Check if user is the owner of the comment or an admin
+      if (req.user.role !== "admin") {
+        const { data: discussion, error: findError } = await supabase
+          .from("course_discussions")
+          .select("user_id")
+          .eq("id", discussionId)
+          .single();
+
+        if (findError) throw findError;
+
+        if (discussion.user_id !== userId) {
+          return res.status(403).json({
+            message: "You are not authorized to delete this comment",
+          });
+        }
+      }
+
+      const { error } = await supabase
+        .from("course_discussions")
+        .delete()
+        .eq("id", discussionId);
+
+      if (error) throw error;
+
+      res.status(200).json({ message: "Discussion deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting course discussion:", error);
+      res.status(500).json({ message: error.message });
+    }
+  }
+);
+
 module.exports = router;
