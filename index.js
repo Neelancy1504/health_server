@@ -6,6 +6,16 @@ const path = require("path");
 const http = require("http");
 const { Server } = require("socket.io");
 const fileUpload = require("express-fileupload");
+const verifyToken = require("./middleware/authMiddleware");
+const adminOnly = require("./middleware/roleMiddleware");
+const { verifyUser } = require("./middleware/authMiddleware");
+const { verifyAdmin } = require("./middleware/roleMiddleware");
+const { verifyDoctor } = require("./middleware/roleMiddleware");
+const { verifyPatient } = require("./middleware/roleMiddleware");
+
+// Update the ADMIN_SUPPORT_ID to use a real admin UUID
+// Use Sahil bhai's ID from your database
+const ADMIN_SUPPORT_ID = "66768b81-2d00-4eca-9145-4cf11f687fe8";
 
 // Make sure to load environment variables right away
 dotenv.config();
@@ -171,21 +181,32 @@ app.post("/api/messages", async (req, res) => {
     const messageData = req.body;
     console.log("Received message via HTTP:", messageData);
 
+    // Add this admin ID handling
+    const adminId =
+      process.env.ADMIN_UUID || "00000000-0000-0000-0000-000000000000";
+
     // Message validation
     if (!messageData.content && messageData.text) {
       messageData.content = messageData.text;
     }
 
+    // Field name compatibility
     if (!messageData.sender_id && messageData.senderId) {
       messageData.sender_id = messageData.senderId;
     }
 
-    if (!messageData.sender_name && messageData.senderName) {
-      messageData.sender_name = messageData.senderName;
+    // Replace admin with real UUID
+    if (
+      messageData.receiver_id === "admin" ||
+      messageData.receiverId === "admin"
+    ) {
+      messageData.receiver_id = ADMIN_SUPPORT_ID;
+    } else if (!messageData.receiver_id && messageData.receiverId) {
+      messageData.receiver_id = messageData.receiverId;
     }
 
-    if (!messageData.receiver_id && messageData.receiverId) {
-      messageData.receiver_id = messageData.receiverId;
+    if (!messageData.sender_name && messageData.senderName) {
+      messageData.sender_name = messageData.senderName;
     }
 
     if (!messageData.room_id && messageData.roomId) {
@@ -372,19 +393,23 @@ io.on("connection", (socket) => {
     console.log(`User ${socket.id} joined room: ${roomId}`);
   });
 
-  // Update the socket handler for messages
+  // Update the socket.on("send_message") handler to use ADMIN_SUPPORT_ID
   socket.on("send_message", async (messageData) => {
     console.log("Message received via socket:", messageData);
 
     try {
-      // Handle field name compatibility
+      // Handle field name compatibility and admin room IDs
       const messageToInsert = {
         content: messageData.content || messageData.text,
         sender_id: messageData.sender_id || messageData.senderId,
         sender_name: messageData.sender_name || messageData.senderName,
-        receiver_id: messageData.receiver_id || messageData.receiverId,
+        // Replace "admin" with ADMIN_SUPPORT_ID
+        receiver_id:
+          messageData.receiver_id === "admin" ||
+          messageData.receiverId === "admin"
+            ? ADMIN_SUPPORT_ID
+            : messageData.receiver_id || messageData.receiverId,
         room_id: messageData.room_id || messageData.roomId,
-        // Add file attachment fields
         is_attachment: messageData.isAttachment || false,
         attachment_type: messageData.attachmentType,
         file_url: messageData.fileUrl,
@@ -393,47 +418,26 @@ io.on("connection", (socket) => {
         file_size: messageData.fileSize,
       };
 
-      // Insert message into Supabase
-      const { data, error } = await supabase
+      // Insert message into database
+      const { data: insertedMessage, error } = await supabase
         .from("messages")
         .insert(messageToInsert)
         .select();
 
       if (error) throw error;
 
-      // Only emit if data returned
-      if (data && data.length > 0) {
-        const savedMessage = data[0];
+      const messageToEmit = {
+        id: insertedMessage[0].id,
+        ...messageData,
+        timestamp: insertedMessage[0].created_at,
+      };
 
-        // Create a message object with both naming conventions for full compatibility
-        const messageToEmit = {
-          id: savedMessage.id,
-          text: savedMessage.content,
-          content: savedMessage.content,
-          senderId: savedMessage.sender_id,
-          sender_id: savedMessage.sender_id,
-          senderName: savedMessage.sender_name,
-          sender_name: savedMessage.sender_name,
-          receiverId: savedMessage.receiver_id,
-          receiver_id: savedMessage.receiver_id,
-          timestamp: savedMessage.created_at,
-          created_at: savedMessage.created_at,
-          roomId: savedMessage.room_id,
-          room_id: savedMessage.room_id,
-          // Add attachment fields to emitted message
-          isAttachment: savedMessage.is_attachment,
-          attachmentType: savedMessage.attachment_type,
-          fileUrl: savedMessage.file_url,
-          fileName: savedMessage.file_name,
-          fileType: savedMessage.file_type,
-          fileSize: savedMessage.file_size,
-        };
+      io.to(messageData.room_id || messageData.roomId).emit(
+        "receive_message",
+        messageToEmit
+      );
 
-        // Include the original sender's socket ID to prevent duplicate messages
-        socket.to(savedMessage.room_id).emit("receive_message", messageToEmit);
-        // Send back to sender with confirmation
-        socket.emit("message_confirmed", messageToEmit);
-      }
+      socket.emit("message_confirmed", messageToEmit);
     } catch (error) {
       console.error("Error saving message via socket:", error);
       socket.emit("message_error", {
@@ -627,6 +631,194 @@ app.put("/api/user-profile/:userId", async (req, res) => {
     });
   }
 });
+
+// Update the API endpoint to handle chat rooms correctly
+app.get(
+  "/api/admin/support-users",
+  verifyToken,
+  adminOnly,
+  async (req, res) => {
+    try {
+      console.log("Admin support users endpoint accessed by:", req.user.id);
+
+      // Find all chat rooms with user1_id or user2_id matching ADMIN_SUPPORT_ID
+      // OR rooms with 'admin-' prefix in room_id
+      const { data: rooms, error: roomsError } = await supabase
+        .from("chat_rooms")
+        .select("*")
+        .or(
+          `user1_id.eq.${ADMIN_SUPPORT_ID},user2_id.eq.${ADMIN_SUPPORT_ID},room_id.ilike.admin-%`
+        );
+
+      console.log("Room query executed, found rooms:", rooms?.length || 0);
+
+      if (roomsError) {
+        console.error("Room query error:", roomsError);
+        throw roomsError;
+      }
+
+      // If no rooms found, return empty array immediately
+      if (!rooms || rooms.length === 0) {
+        console.log("No admin chat rooms found");
+        return res.json([]);
+      }
+
+      // Extract unique user IDs who have chatted with admin
+      const userIds = Array.from(
+        new Set(
+          rooms.flatMap((room) => {
+            // Extract user ID from room ID for rooms with 'admin-' prefix
+            if (room.room_id && room.room_id.startsWith("admin-")) {
+              const parts = room.room_id.split("-");
+              if (parts.length > 1) {
+                return [parts[1]];
+              }
+            }
+
+            // Extract user ID from user1_id or user2_id
+            if (room.user1_id === ADMIN_SUPPORT_ID) {
+              return [room.user2_id];
+            } else if (room.user2_id === ADMIN_SUPPORT_ID) {
+              return [room.user1_id];
+            }
+            return [];
+          })
+        )
+      );
+
+      console.log("Extracted user IDs:", userIds);
+
+      if (userIds.length === 0) {
+        return res.json([]);
+      }
+
+      // Get user details
+      const { data: users, error: usersError } = await supabase
+        .from("users")
+        .select("*")
+        .in("id", userIds);
+
+      if (usersError) {
+        console.error("User query error:", usersError);
+        throw usersError;
+      }
+
+      console.log("Found users:", users?.length || 0);
+      res.json(users || []);
+    } catch (error) {
+      console.error("Error fetching support users:", error);
+      // Return empty array instead of error to prevent loading state
+      res.json([]);
+    }
+  }
+);
+
+// Add this new endpoint to fetch all potential support users
+
+// Replace your current /api/admin/all-users endpoint with this optimized version
+
+app.get("/api/admin/all-users", verifyToken, adminOnly, async (req, res) => {
+  try {
+    console.log("Fetching all users for admin chat");
+
+    // Add pagination to improve performance
+    const page = parseInt(req.query.page) || 0;
+    const limit = parseInt(req.query.limit) || 100;
+    const offset = page * limit;
+
+    // Use more efficient query with pagination and basic fields only
+    const { data: users, error, count } = await supabase
+      .from("users")
+      .select("id, name, email, role, verified, company, degree", { count: "exact" })
+      .in("role", ["doctor", "pharma"])
+      .order("name")
+      .range(offset, offset + limit - 1);
+
+    if (error) {
+      console.error("Database error:", error);
+      throw error;
+    }
+
+    console.log(`Found ${users?.length || 0} users (page ${page})`);
+    res.json({
+      users: users || [], 
+      total: count || 0,
+      hasMore: users && count > offset + users.length
+    });
+  } catch (error) {
+    console.error("Error fetching all users:", error);
+    // Return empty array instead of error to prevent loading state issues
+    res.json({ users: [], total: 0, hasMore: false });
+  }
+});
+
+// Update the existing endpoint or add a new one
+// Add this near your other health check endpoints
+
+app.get("/api/admin/health", verifyToken, adminOnly, async (req, res) => {
+  try {
+    // Simple query to test database access
+    const { data, error } = await supabase
+      .from("users")
+      .select("count", { count: "exact", head: true })
+      .limit(1);
+      
+    if (error) throw error;
+    
+    res.status(200).json({ 
+      status: "ok", 
+      message: "Admin API is healthy",
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error("Admin health check failed:", error);
+    res.status(500).json({ 
+      status: "error", 
+      message: "Database connection issue",
+      error: error.message 
+    });
+  }
+});
+app.get(
+  "/api/admin/all-platform-users",
+  verifyToken,
+  adminOnly,
+  async (req, res) => {
+    try {
+      console.log("Fetching all platform users for admin chat");
+
+      // Get all users (not just doctors and pharma)
+      const { data: users, error } = await supabase
+        .from("users")
+        .select(
+          "id, name, email, role, verified, company, degree, phone, created_at"
+        )
+        .order("role", { ascending: true }) // Group by role
+        .order("name", { ascending: true }); // Then alphabetically
+
+      if (error) throw error;
+
+      // Format the response
+      const formattedUsers = users.map((user) => ({
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        verified: user.verified,
+        company: user.company,
+        degree: user.degree,
+        phone: user.phone,
+        joinDate: user.created_at,
+      }));
+
+      console.log(`Found ${formattedUsers.length} total users`);
+      res.json(formattedUsers);
+    } catch (error) {
+      console.error("Error fetching all platform users:", error);
+      res.status(500).json({ message: error.message });
+    }
+  }
+);
 
 // Serve a welcome page at the root route
 app.get("/", (req, res) => {
