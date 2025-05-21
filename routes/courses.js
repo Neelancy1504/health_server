@@ -347,6 +347,8 @@ router.delete(
   }
 );
 
+// Update the discussions endpoints to support replies
+
 // Get discussions for a course
 router.get("/:courseId/discussions", async (req, res) => {
   try {
@@ -366,6 +368,7 @@ router.get("/:courseId/discussions", async (req, res) => {
       content: discussion.content,
       created_at: discussion.created_at,
       user_id: discussion.user_id,
+      parent_id: discussion.parent_id, // Add this field
       user_name: discussion.user?.name || "Unknown User",
       role: discussion.user?.role,
     }));
@@ -381,7 +384,7 @@ router.get("/:courseId/discussions", async (req, res) => {
 router.post("/:courseId/discussions", verifyToken, async (req, res) => {
   try {
     const { courseId } = req.params;
-    const { content } = req.body;
+    const { content, parent_id } = req.body; // Also accept parent_id
     const userId = req.user.id;
 
     // Get user information
@@ -398,12 +401,27 @@ router.post("/:courseId/discussions", verifyToken, async (req, res) => {
         .json({ message: "Failed to retrieve user information" });
     }
 
+    // If parent_id provided, verify it exists
+    if (parent_id) {
+      const { data: parentComment, error: parentError } = await supabase
+        .from("course_discussions")
+        .select("id")
+        .eq("id", parent_id)
+        .eq("course_id", courseId)
+        .single();
+
+      if (parentError || !parentComment) {
+        return res.status(400).json({ message: "Parent comment not found" });
+      }
+    }
+
     const { data, error } = await supabase
       .from("course_discussions")
       .insert({
         course_id: courseId,
         user_id: userId,
         content,
+        parent_id: parent_id || null, // Add parent_id
       })
       .select();
 
