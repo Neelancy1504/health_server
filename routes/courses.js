@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const verifyToken = require("../middleware/authMiddleware");
-const verifyRole = require("../middleware/roleMiddleware");
+const { verifyRole } = require("../middleware/roleMiddleware"); // Fixed import
 const { supabase } = require("../config/supabase");
 
 // Get all courses

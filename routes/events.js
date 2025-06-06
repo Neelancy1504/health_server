@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const verifyToken = require("../middleware/authMiddleware");
-const verifyRole = require("../middleware/roleMiddleware");
+const { verifyRole } = require("../middleware/roleMiddleware"); // Fixed import - add destructuring
 const { supabase } = require("../config/supabase");
 
 // Get registered events for the current user
@@ -466,71 +466,77 @@ router.post("/:id/register", verifyToken, async (req, res) => {
     }
 
     // Handle company sponsorship registration - use optional chaining to prevent errors
-if (registrationData.isCompanySponsor === true || registrationData.isCompanySponsor === "true") {
-  // Validate required fields
-  if (
-    !registrationData.companyName ||
-    !registrationData.contactPerson ||
-    !registrationData.email
-  ) {
-    return res.status(400).json({
-      message:
-        "Missing required sponsor information. Please provide company name, contact person, and email.",
-    });
-  }
+    if (
+      registrationData.isCompanySponsor === true ||
+      registrationData.isCompanySponsor === "true"
+    ) {
+      // Validate required fields
+      if (
+        !registrationData.companyName ||
+        !registrationData.contactPerson ||
+        !registrationData.email
+      ) {
+        return res.status(400).json({
+          message:
+            "Missing required sponsor information. Please provide company name, contact person, and email.",
+        });
+      }
 
-  // Add the company as a sponsor to the event
-  const newSponsor = {
-    id: Date.now().toString(),
-    name: registrationData.companyName,
-    level: registrationData.sponsorshipLevel || "Standard",
-    contactPerson: registrationData.contactPerson,
-    contactEmail: registrationData.email,
-    contactPhone: registrationData.phone || null,
-    website: registrationData.companyWebsite || null,
-    additionalNotes: registrationData.additionalNotes || null,
-    registered_at: new Date().toISOString(),
-    registered_by: userId,
-  };
+      // Add the company as a sponsor to the event
+      const newSponsor = {
+        id: Date.now().toString(),
+        name: registrationData.companyName,
+        level: registrationData.sponsorshipLevel || "Standard",
+        contactPerson: registrationData.contactPerson,
+        contactEmail: registrationData.email,
+        contactPhone: registrationData.phone || null,
+        website: registrationData.companyWebsite || null,
+        additionalNotes: registrationData.additionalNotes || null,
+        registered_at: new Date().toISOString(),
+        registered_by: userId,
+      };
 
-  // Get current sponsors array and add the new one
-  let currentSponsors = event.sponsors || [];
-  currentSponsors = [...currentSponsors, newSponsor];
+      // Get current sponsors array and add the new one
+      let currentSponsors = event.sponsors || [];
+      currentSponsors = [...currentSponsors, newSponsor];
 
-  // Update the event with the new sponsor
-  const { error: updateError } = await supabase
-    .from("events")
-    .update({
-      sponsors: currentSponsors,
-    })
-    .eq("id", eventId);
+      // Update the event with the new sponsor
+      const { error: updateError } = await supabase
+        .from("events")
+        .update({
+          sponsors: currentSponsors,
+        })
+        .eq("id", eventId);
 
-  if (updateError) throw updateError;
+      if (updateError) throw updateError;
 
-  // Also create a registration record to track attendance
-  // Only use fields that exist in the schema
-  const registrationRecord = {
-    event_id: eventId,
-    user_id: userId,
-    registered_at: new Date().toISOString(),
-    is_sponsor: true,  // Explicitly set to boolean true
-    company_name: registrationData.companyName,
-    sponsorship_level: registrationData.sponsorshipLevel || "Standard",
-  };
-  
-  console.log("Inserting registration with is_sponsor:", registrationRecord.is_sponsor);
-  
-  const { error: regError } = await supabase
-    .from("event_registrations")
-    .insert(registrationRecord);
+      // Also create a registration record to track attendance
+      // Only use fields that exist in the schema
+      const registrationRecord = {
+        event_id: eventId,
+        user_id: userId,
+        registered_at: new Date().toISOString(),
+        is_sponsor: true, // Explicitly set to boolean true
+        company_name: registrationData.companyName,
+        sponsorship_level: registrationData.sponsorshipLevel || "Standard",
+      };
 
-  if (regError) throw regError;
+      console.log(
+        "Inserting registration with is_sponsor:",
+        registrationRecord.is_sponsor
+      );
 
-  return res.status(200).json({
-    message: "Company registered as sponsor successfully",
-    sponsor: newSponsor,
-  });
-}
+      const { error: regError } = await supabase
+        .from("event_registrations")
+        .insert(registrationRecord);
+
+      if (regError) throw regError;
+
+      return res.status(200).json({
+        message: "Company registered as sponsor successfully",
+        sponsor: newSponsor,
+      });
+    }
 
     // Handle regular individual registration
     else {

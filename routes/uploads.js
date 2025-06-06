@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const verifyToken = require("../middleware/authMiddleware");
-const verifyRole = require("../middleware/roleMiddleware");
+const { verifyRole } = require("../middleware/roleMiddleware"); // Fixed import
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
@@ -307,7 +307,7 @@ router.get("/brochure/:path/metadata", async (req, res) => {
 router.get("/pdf/:filename", async (req, res) => {
   try {
     const filename = req.params.filename;
-    const filePath = `brochures/${filename}`;
+    const filePath = `brochers/${filename}`;
 
     // Get file metadata first
     const { data: metadata, error: metadataError } = await supabaseAdmin.storage
@@ -528,34 +528,34 @@ router.post("/profile-image", verifyToken, async (req, res) => {
 
     const file = req.files.profile_image;
     const userId = req.user.id;
-    
+
     // First, get the current user to find existing avatar_url
     const { data: userData, error: userError } = await supabase
       .from("users")
       .select("avatar_url")
       .eq("id", userId)
       .single();
-      
+
     if (!userError && userData?.avatar_url) {
       // Extract storage path from the URL
       try {
         const url = new URL(userData.avatar_url);
-        const pathParts = url.pathname.split('/');
-        const storagePath = pathParts.slice(pathParts.indexOf('medevents') + 1).join('/');
-        
+        const pathParts = url.pathname.split("/");
+        const storagePath = pathParts
+          .slice(pathParts.indexOf("medevents") + 1)
+          .join("/");
+
         if (storagePath) {
           // Delete the old image from storage
           console.log(`Deleting old profile image: ${storagePath}`);
-          await supabaseAdmin.storage
-            .from("medevents")
-            .remove([storagePath]);
+          await supabaseAdmin.storage.from("medevents").remove([storagePath]);
         }
       } catch (deleteError) {
         console.error("Error deleting old profile image:", deleteError);
         // Continue with upload even if delete fails
       }
     }
-    
+
     // Generate unique filename
     const fileExtension = path.extname(file.name) || ".jpg";
     const fileName = `profile-${Date.now()}${fileExtension}`;
@@ -615,7 +615,6 @@ router.post("/profile-image", verifyToken, async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 });
-
 
 // Chat document upload endpoint - using express-fileupload
 router.post("/chat-document", verifyToken, async (req, res) => {

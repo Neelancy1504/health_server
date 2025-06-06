@@ -7,11 +7,7 @@ const http = require("http");
 const { Server } = require("socket.io");
 const fileUpload = require("express-fileupload");
 const verifyToken = require("./middleware/authMiddleware");
-const adminOnly = require("./middleware/roleMiddleware");
-const { verifyUser } = require("./middleware/authMiddleware");
-const { verifyAdmin } = require("./middleware/roleMiddleware");
-const { verifyDoctor } = require("./middleware/roleMiddleware");
-const { verifyPatient } = require("./middleware/roleMiddleware");
+const { adminOnly } = require("./middleware/roleMiddleware");
 
 // Update the ADMIN_SUPPORT_ID to use a real admin UUID
 // Use Sahil bhai's ID from your database
@@ -456,12 +452,8 @@ io.on("connection", (socket) => {
         content: messageData.content || messageData.text,
         sender_id: messageData.sender_id || messageData.senderId,
         sender_name: messageData.sender_name || messageData.senderName,
-        // Replace "admin" with ADMIN_SUPPORT_ID
-        receiver_id:
-          messageData.receiver_id === "admin" ||
-          messageData.receiverId === "admin"
-            ? ADMIN_SUPPORT_ID
-            : messageData.receiver_id || messageData.receiverId,
+        // Handle admin messages properly
+        receiver_id: messageData.receiver_id || messageData.receiverId,
         room_id: messageData.room_id || messageData.roomId,
         is_attachment: messageData.isAttachment || false,
         attachment_type: messageData.attachmentType,
@@ -536,11 +528,13 @@ io.on("connection", (socket) => {
         timestamp: insertedMessage[0].created_at,
       };
 
+      // Emit to the room
       io.to(messageData.room_id || messageData.roomId).emit(
         "receive_message",
         messageToEmit
       );
 
+      // Confirm to sender
       socket.emit("message_confirmed", messageToEmit);
     } catch (error) {
       console.error("Error saving message via socket:", error);
@@ -888,46 +882,83 @@ app.get(
   }
 );
 
-// Replace your current /api/admin/all-users endpoint with this optimized version
+// Replace the existing /api/admin/all-users endpoint with this fixed version
 
 app.get("/api/admin/all-users", verifyToken, adminOnly, async (req, res) => {
   try {
-    console.log("Fetching all users for admin chat");
+    console.log("Admin all-users endpoint accessed by:", req.user?.id);
+    console.log("User role:", req.user?.role);
 
-    // Add pagination to improve performance
+    // Add timeout protection at the database level
     const page = parseInt(req.query.page) || 0;
-    const limit = parseInt(req.query.limit) || 100;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100); // Cap at 100
     const offset = page * limit;
 
-    // Use more efficient query with pagination and basic fields only
+    console.log(
+      `Fetching users - page: ${page}, limit: ${limit}, offset: ${offset}`
+    );
+
+    // Use a more efficient query with timeout
     const {
       data: users,
       error,
       count,
-    } = await supabase
-      .from("users")
-      .select("id, name, email, role, verified, company, degree", {
-        count: "exact",
-      })
-      .in("role", ["doctor", "pharma"])
-      .order("name")
-      .range(offset, offset + limit - 1);
+    } = await Promise.race([
+      supabase
+        .from("users")
+        .select(
+          "id, name, email, role, verified, company, degree, phone, created_at",
+          { count: "exact" }
+        )
+        .neq("id", req.user.id)
+        .in("role", ["doctor", "pharma", "user"])
+        .order("name", { ascending: true })
+        .range(offset, offset + limit - 1),
+
+      // Add a timeout promise
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Database query timeout")), 25000)
+      ),
+    ]);
 
     if (error) {
       console.error("Database error:", error);
       throw error;
     }
 
-    console.log(`Found ${users?.length || 0} users (page ${page})`);
+    console.log(`Successfully fetched ${users?.length || 0} users`);
+
+    const formattedUsers = (users || []).map((user) => ({
+      id: user.id,
+      name: user.name || "Unknown User",
+      email: user.email || "",
+      role: user.role || "user",
+      verified: user.verified || false,
+      company: user.company || "",
+      degree: user.degree || "",
+      phone: user.phone || "",
+      created_at: user.created_at,
+      hasMessages: false,
+    }));
+
     res.json({
-      users: users || [],
+      users: formattedUsers,
       total: count || 0,
       hasMore: users && count > offset + users.length,
+      page: page,
+      limit: limit,
     });
   } catch (error) {
-    console.error("Error fetching all users:", error);
-    // Return empty array instead of error to prevent loading state issues
-    res.json({ users: [], total: 0, hasMore: false });
+    console.error("Error in /api/admin/all-users:", error);
+
+    // Return a structured error response
+    res.status(500).json({
+      message: "Failed to fetch users",
+      error: error.message,
+      users: [],
+      total: 0,
+      hasMore: false,
+    });
   }
 });
 
@@ -1124,3 +1155,120 @@ if (process.env.NODE_ENV !== "production") {
 
 // For Vercel serverless deployment
 module.exports = app;
+
+// Add these endpoints after your existing routes
+
+// Simple users endpoint for admin chat
+app.get("/api/admin/users-simple", verifyToken, adminOnly, async (req, res) => {
+  try {
+    console.log("Simple users endpoint accessed by admin:", req.user?.id);
+
+    const { data: users, error } = await supabase
+      .from("users")
+      .select(
+        "id, name, email, role, verified, company, degree, phone, created_at"
+      )
+      .neq("id", req.user.id)
+      .in("role", ["doctor", "pharma", "user"])
+      .order("name", { ascending: true })
+      .limit(100); // Limit for performance
+
+    if (error) {
+      console.error("Database error in simple endpoint:", error);
+      throw error;
+    }
+
+    console.log(
+      `Simple endpoint: Successfully fetched ${users?.length || 0} users`
+    );
+
+    const formattedUsers = (users || []).map((user) => ({
+      id: user.id,
+      name: user.name || "Unknown User",
+      email: user.email || "",
+      role: user.role || "user",
+      verified: user.verified || false,
+      company: user.company || "",
+      degree: user.degree || "",
+      phone: user.phone || "",
+      created_at: user.created_at,
+      hasMessages: false,
+    }));
+
+    res.json({
+      users: formattedUsers,
+      count: formattedUsers.length,
+    });
+  } catch (error) {
+    console.error("Error in simple users endpoint:", error);
+    res.status(500).json({
+      users: [],
+      count: 0,
+      error: error.message,
+    });
+  }
+});
+
+// Test connection endpoint
+app.get(
+  "/api/admin/test-connection",
+  verifyToken,
+  adminOnly,
+  async (req, res) => {
+    try {
+      console.log("Admin test connection endpoint accessed by:", req.user?.id);
+
+      // Simple database connectivity test
+      const { data, error } = await supabase
+        .from("users")
+        .select("count")
+        .limit(1);
+
+      if (error) {
+        console.error("Database connectivity test failed:", error);
+        throw error;
+      }
+
+      res.json({
+        success: true,
+        message: "Admin connection test successful",
+        user: {
+          id: req.user.id,
+          role: req.user.role,
+        },
+        database: "connected",
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error("Admin test connection error:", error);
+      res.status(500).json({
+        success: false,
+        message: error.message,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+// Add this simple test endpoint
+
+app.get("/api/admin/debug", verifyToken, adminOnly, async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      message: "Admin debug endpoint working",
+      user: {
+        id: req.user.id,
+        role: req.user.role,
+        name: req.user.name,
+      },
+      timestamp: new Date().toISOString(),
+      server: "healthy",
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});

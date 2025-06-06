@@ -4,13 +4,13 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { supabase } = require("../config/supabase");
 const verifyToken = require("../middleware/authMiddleware");
-const verifyRole = require("../middleware/roleMiddleware");
-const { sendVerificationEmail } = require('../config/email');
-const { 
-  generateVerificationToken, 
+const { verifyRole } = require("../middleware/roleMiddleware"); // Fixed import
+const { sendVerificationEmail } = require("../config/email");
+const {
+  generateVerificationToken,
   storeVerificationToken,
-  verifyToken: verifyEmailToken // Rename this import to avoid the conflict
-} = require('../utils/tokenUtils');
+  verifyToken: verifyEmailToken,
+} = require("../utils/tokenUtils");
 
 // Signup Route
 router.post("/signup", async (req, res) => {
@@ -122,12 +122,12 @@ router.get("/verify-email", async (req, res) => {
 
     // Redirect to the verification success page
     //res.redirect(`${process.env.FRONTEND_URL}/verification-success`);
-    res.json({ success: true , message: "Email verified successfully" });
+    res.json({ success: true, message: "Email verified successfully" });
   } catch (error) {
     onsole.error("Email verification error:", error);
-    return res.status(400).json({ 
-      success: false, 
-      message: error.message || "Verification failed" 
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Verification failed",
     });
   }
 });

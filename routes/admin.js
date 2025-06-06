@@ -1,12 +1,10 @@
 const express = require("express");
 const router = express.Router();
 const verifyToken = require("../middleware/authMiddleware");
-const verifyRole = require("../middleware/roleMiddleware");
+const { verifyRole, adminOnly } = require("../middleware/roleMiddleware"); // Fixed import
 const { supabase } = require("../config/supabase");
 const { validate: isUuid } = require("uuid"); // Import UUID validation library
 
-// Admin-only middleware
-const adminOnly = verifyRole(["admin"]);
 // In your health_server/routes/admin.js file:
 
 // Get all pharma representatives
