@@ -175,7 +175,8 @@ app.get("/api/messages/:roomId", async (req, res) => {
   }
 });
 
-// Add message via HTTP API (fallback method)
+// Update the message creation to automatically create/update chat rooms
+
 app.post("/api/messages", async (req, res) => {
   try {
     const messageData = req.body;
@@ -200,7 +201,7 @@ app.post("/api/messages", async (req, res) => {
       messageData.receiver_id === "admin" ||
       messageData.receiverId === "admin"
     ) {
-      messageData.receiver_id = ADMIN_SUPPORT_ID;
+      messageData.receiver_id = adminId;
     } else if (!messageData.receiver_id && messageData.receiverId) {
       messageData.receiver_id = messageData.receiverId;
     }
@@ -211,6 +212,58 @@ app.post("/api/messages", async (req, res) => {
 
     if (!messageData.room_id && messageData.roomId) {
       messageData.room_id = messageData.roomId;
+    }
+
+    // AUTO-CREATE OR UPDATE CHAT ROOM
+    const user1_id = messageData.sender_id;
+    const user2_id = messageData.receiver_id;
+    const room_id = messageData.room_id;
+
+    // Check if chat room exists
+    let { data: existingRoom, error: roomCheckError } = await supabase
+      .from("chat_rooms")
+      .select("*")
+      .eq("room_id", room_id)
+      .single();
+
+    if (roomCheckError && roomCheckError.code !== "PGRST116") {
+      console.error("Error checking for existing room:", roomCheckError);
+    }
+
+    if (!existingRoom) {
+      // Create new chat room
+      const { data: newRoom, error: roomCreateError } = await supabase
+        .from("chat_rooms")
+        .insert({
+          room_id: room_id,
+          user1_id: user1_id,
+          user2_id: user2_id,
+          type: "direct",
+          name: `Chat between ${
+            messageData.sender_name || user1_id
+          } and ${user2_id}`,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+
+      if (roomCreateError) {
+        console.error("Error creating chat room:", roomCreateError);
+        // Continue with message creation even if room creation fails
+      } else {
+        console.log("Created new chat room:", newRoom.id);
+      }
+    } else {
+      // Update existing room's updated_at timestamp
+      const { error: updateError } = await supabase
+        .from("chat_rooms")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("room_id", room_id);
+
+      if (updateError) {
+        console.error("Error updating chat room timestamp:", updateError);
+      }
     }
 
     // Prepare the message object for insertion
@@ -418,6 +471,57 @@ io.on("connection", (socket) => {
         file_size: messageData.fileSize,
       };
 
+      // AUTO-CREATE OR UPDATE CHAT ROOM (same logic as HTTP endpoint)
+      const user1_id = messageToInsert.sender_id;
+      const user2_id = messageToInsert.receiver_id;
+      const room_id = messageToInsert.room_id;
+
+      // Check if chat room exists
+      let { data: existingRoom, error: roomCheckError } = await supabase
+        .from("chat_rooms")
+        .select("*")
+        .eq("room_id", room_id)
+        .single();
+
+      if (roomCheckError && roomCheckError.code !== "PGRST116") {
+        console.error("Error checking for existing room:", roomCheckError);
+      }
+
+      if (!existingRoom) {
+        // Create new chat room
+        const { data: newRoom, error: roomCreateError } = await supabase
+          .from("chat_rooms")
+          .insert({
+            room_id: room_id,
+            user1_id: user1_id,
+            user2_id: user2_id,
+            type: "direct",
+            name: `Chat between ${
+              messageToInsert.sender_name || user1_id
+            } and ${user2_id}`,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .select()
+          .single();
+
+        if (roomCreateError) {
+          console.error("Error creating chat room:", roomCreateError);
+        } else {
+          console.log("Created new chat room via socket:", newRoom.id);
+        }
+      } else {
+        // Update existing room's updated_at timestamp
+        const { error: updateError } = await supabase
+          .from("chat_rooms")
+          .update({ updated_at: new Date().toISOString() })
+          .eq("room_id", room_id);
+
+        if (updateError) {
+          console.error("Error updating chat room timestamp:", updateError);
+        }
+      }
+
       // Insert message into database
       const { data: insertedMessage, error } = await supabase
         .from("messages")
@@ -539,33 +643,104 @@ app.post("/api/chat-rooms", async (req, res) => {
   }
 });
 
-// Get chat rooms for a user
+// Get chat rooms for a user - FIXED VERSION
 app.get("/api/chat-rooms/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
+    console.log(`Fetching chat rooms for user ${userId}`);
 
-    // Get rooms where user is either user1 or user2
-    const { data, error } = await supabase
-      .from("chat_rooms")
-      .select(
-        `
-        *,
-        user1:user1_id(id, name, role, avatar_url),
-        user2:user2_id(id, name, role, avatar_url)
-      `
-      )
-      .or(`user1_id.eq.${userId},user2_id.eq.${userId}`);
+    // First, get all messages where this user is sender or receiver
+    const { data: userMessages, error: messagesError } = await supabase
+      .from("messages")
+      .select("room_id, created_at, content, sender_id, receiver_id")
+      .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
+      .order("created_at", { ascending: false });
 
-    if (error) throw error;
+    if (messagesError) {
+      console.error("Error fetching messages:", messagesError);
+      throw messagesError;
+    }
 
-    res.json({
-      success: true,
-      rooms: data,
+    if (!userMessages || userMessages.length === 0) {
+      console.log("No messages found for user");
+      return res.json([]);
+    }
+
+    // Group messages by room_id and get the latest message for each room
+    const roomsMap = new Map();
+
+    userMessages.forEach((message) => {
+      const roomId = message.room_id;
+      if (
+        !roomsMap.has(roomId) ||
+        new Date(message.created_at) > new Date(roomsMap.get(roomId).created_at)
+      ) {
+        roomsMap.set(roomId, message);
+      }
     });
+
+    // Get unique user IDs from all rooms
+    const otherUserIds = Array.from(
+      new Set(
+        Array.from(roomsMap.values()).map((message) => {
+          return message.sender_id === userId
+            ? message.receiver_id
+            : message.sender_id;
+        })
+      )
+    );
+
+    // Fetch user details for all other users
+    const { data: users, error: usersError } = await supabase
+      .from("users")
+      .select("id, name, role, email")
+      .in("id", otherUserIds);
+
+    if (usersError) {
+      console.error("Error fetching users:", usersError);
+      throw usersError;
+    }
+
+    // Create the response with chat room information
+    const chatRooms = Array.from(roomsMap.entries()).map(
+      ([roomId, lastMessage]) => {
+        const otherUserId =
+          lastMessage.sender_id === userId
+            ? lastMessage.receiver_id
+            : lastMessage.sender_id;
+
+        const otherUser = users.find((u) => u.id === otherUserId);
+
+        return {
+          id: roomId, // Use room_id as the identifier
+          room_id: roomId,
+          user1_id: userId,
+          user2_id: otherUserId,
+          user1: { id: userId }, // Current user
+          user2: otherUser || { id: otherUserId, name: "Unknown User" },
+          last_message: {
+            content: lastMessage.content,
+            created_at: lastMessage.created_at,
+            sender_id: lastMessage.sender_id,
+          },
+          created_at: lastMessage.created_at,
+          updated_at: lastMessage.created_at,
+        };
+      }
+    );
+
+    // Sort by last message time (most recent first)
+    chatRooms.sort(
+      (a, b) =>
+        new Date(b.last_message.created_at) -
+        new Date(a.last_message.created_at)
+    );
+
+    console.log(`Found ${chatRooms.length} chat rooms for user ${userId}`);
+    res.json(chatRooms);
   } catch (error) {
     console.error("Error fetching chat rooms:", error);
     res.status(500).json({
-      success: false,
       message: "Failed to fetch chat rooms",
       error: error.message,
     });
@@ -713,8 +888,6 @@ app.get(
   }
 );
 
-// Add this new endpoint to fetch all potential support users
-
 // Replace your current /api/admin/all-users endpoint with this optimized version
 
 app.get("/api/admin/all-users", verifyToken, adminOnly, async (req, res) => {
@@ -727,9 +900,15 @@ app.get("/api/admin/all-users", verifyToken, adminOnly, async (req, res) => {
     const offset = page * limit;
 
     // Use more efficient query with pagination and basic fields only
-    const { data: users, error, count } = await supabase
+    const {
+      data: users,
+      error,
+      count,
+    } = await supabase
       .from("users")
-      .select("id, name, email, role, verified, company, degree", { count: "exact" })
+      .select("id, name, email, role, verified, company, degree", {
+        count: "exact",
+      })
       .in("role", ["doctor", "pharma"])
       .order("name")
       .range(offset, offset + limit - 1);
@@ -741,9 +920,9 @@ app.get("/api/admin/all-users", verifyToken, adminOnly, async (req, res) => {
 
     console.log(`Found ${users?.length || 0} users (page ${page})`);
     res.json({
-      users: users || [], 
+      users: users || [],
       total: count || 0,
-      hasMore: users && count > offset + users.length
+      hasMore: users && count > offset + users.length,
     });
   } catch (error) {
     console.error("Error fetching all users:", error);
@@ -762,20 +941,20 @@ app.get("/api/admin/health", verifyToken, adminOnly, async (req, res) => {
       .from("users")
       .select("count", { count: "exact", head: true })
       .limit(1);
-      
+
     if (error) throw error;
-    
-    res.status(200).json({ 
-      status: "ok", 
+
+    res.status(200).json({
+      status: "ok",
       message: "Admin API is healthy",
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error("Admin health check failed:", error);
-    res.status(500).json({ 
-      status: "error", 
+    res.status(500).json({
+      status: "error",
       message: "Database connection issue",
-      error: error.message 
+      error: error.message,
     });
   }
 });
