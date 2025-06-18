@@ -349,26 +349,46 @@ router.delete(
 
 // Update the discussions endpoints to support replies
 
-// Get discussions for a course
+// Get discussions for a course (with optional video filter)
 router.get("/:courseId/discussions", async (req, res) => {
   try {
     const { courseId } = req.params;
+    const { video_id } = req.query;
 
-    const { data, error } = await supabase
+    console.log('Getting discussions for course:', courseId, 'video:', video_id);
+
+    let query = supabase
       .from("course_discussions")
-      .select("*, user:user_id(name, role)")
-      .eq("course_id", courseId)
-      .order("created_at", { ascending: false });
+      .select(`
+        *,
+        user:user_id(name, role)
+      `)
+      .eq("course_id", courseId);
 
-    if (error) throw error;
+    // ONLY filter by video_id if it's explicitly provided and valid
+    if (video_id && video_id !== 'null' && video_id !== 'undefined') {
+      console.log('Filtering by video_id:', video_id);
+      query = query.eq("video_id", video_id);
+    }
+    // If no video_id is provided, show ALL discussions (original behavior)
 
-    // Format the response to include user data
+    const { data, error } = await query.order("created_at", { ascending: false });
+
+    if (error) {
+      console.error('Database error:', error);
+      throw error;
+    }
+
+    console.log('Found discussions:', data?.length || 0);
+
+    // Format the response
     const formattedDiscussions = data.map((discussion) => ({
       id: discussion.id,
       content: discussion.content,
       created_at: discussion.created_at,
       user_id: discussion.user_id,
-      parent_id: discussion.parent_id, // Add this field
+      parent_id: discussion.parent_id,
+      video_id: discussion.video_id,
       user_name: discussion.user?.name || "Unknown User",
       role: discussion.user?.role,
     }));
@@ -380,25 +400,33 @@ router.get("/:courseId/discussions", async (req, res) => {
   }
 });
 
-// Add a discussion to a course
+// Add a discussion to a course (keep original functionality)
 router.post("/:courseId/discussions", verifyToken, async (req, res) => {
   try {
     const { courseId } = req.params;
-    const { content, parent_id } = req.body; // Also accept parent_id
+    const { content, parent_id, video_id } = req.body;
     const userId = req.user.id;
+
+    console.log('Adding discussion:', {
+      courseId,
+      userId,
+      content,
+      parent_id,
+      video_id
+    });
 
     // Get user information
     const { data: userData, error: userError } = await supabase
       .from("users")
-      .select("name")
+      .select("name, role")
       .eq("id", userId)
       .single();
 
     if (userError) {
       console.error("Error fetching user data:", userError);
-      return res
-        .status(500)
-        .json({ message: "Failed to retrieve user information" });
+      return res.status(500).json({ 
+        message: "Failed to retrieve user information" 
+      });
     }
 
     // If parent_id provided, verify it exists
@@ -415,19 +443,36 @@ router.post("/:courseId/discussions", verifyToken, async (req, res) => {
       }
     }
 
+    // Insert the discussion
+    const insertData = {
+      course_id: courseId,
+      user_id: userId,
+      content,
+      parent_id: parent_id || null,
+      video_id: video_id || null, // Will be null for course discussions, video ID for video discussions
+    };
+
     const { data, error } = await supabase
       .from("course_discussions")
-      .insert({
-        course_id: courseId,
-        user_id: userId,
-        content,
-        parent_id: parent_id || null, // Add parent_id
-      })
-      .select();
+      .insert(insertData)
+      .select()
+      .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('Database insert error:', error);
+      throw error;
+    }
 
-    res.status(201).json(data[0]);
+    console.log('Successfully added discussion:', data);
+
+    // Return the discussion with user data
+    const response = {
+      ...data,
+      user_name: userData.name,
+      role: userData.role,
+    };
+
+    res.status(201).json(response);
   } catch (error) {
     console.error("Error adding course discussion:", error);
     res.status(500).json({ message: error.message });
