@@ -101,11 +101,11 @@ router.get("/search-users", verifyToken, async (req, res) => {
       return res.json([]);
     }
 
-    // Search by email or phone
+    // Update select to include avatar_url
     const { data, error } = await supabase
       .from("users")
-      .select("id, name, email, phone, role")
-      .or(`email.ilike.%${query}%,phone.ilike.%${query}%`)
+      .select("id, name, email, phone, role, degree, company, avatar_url") // Include avatar_url
+      .or(`email.ilike.%${query}%,phone.ilike.%${query}%,name.ilike.%${query}%`)
       .limit(10);
 
     if (error) {
