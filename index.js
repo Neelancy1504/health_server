@@ -8,6 +8,7 @@ const { Server } = require("socket.io");
 const fileUpload = require("express-fileupload");
 const verifyToken = require("./middleware/authMiddleware");
 const { adminOnly } = require("./middleware/roleMiddleware");
+const notificationService = require('./services/notificationService');
 
 // Update the ADMIN_SUPPORT_ID to use a real admin UUID
 // Use Sahil bhai's ID from your database
@@ -317,6 +318,30 @@ app.post("/api/messages", async (req, res) => {
       };
 
       io.to(savedMessage.room_id).emit("receive_message", messageToEmit);
+
+      // Send notification to receiver
+      const receiverId = messageData.receiver_id || messageData.receiverId;
+      const senderId = messageData.sender_id || messageData.senderId;
+      const senderName = messageData.sender_name || messageData.senderName || 'Someone';
+      const isAttachment = messageData.isAttachment || false;
+      
+      const content = isAttachment 
+        ? `${senderName} sent you a file`
+        : messageData.content || messageData.text || 'New message';
+      
+      // Only send notification if receiver is not the sender
+      if (receiverId !== senderId) {
+        await notificationService.sendToUser(receiverId, 
+          `Message from ${senderName}`, 
+          content, 
+          {
+            type: 'chat_message',
+            id: senderId,
+            room_id: messageData.room_id || messageData.roomId,
+            action: 'open_chat'
+          }
+        );
+      }
 
       res.status(201).json({
         success: true,
