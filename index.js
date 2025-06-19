@@ -1272,3 +1272,66 @@ app.get("/api/admin/debug", verifyToken, adminOnly, async (req, res) => {
     });
   }
 });
+
+// Add this new endpoint for getting complete user profile
+app.get("/api/user-profile/:userId", verifyToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Fetch complete user details including all signup information
+    const { data: user, error } = await supabase
+      .from("users")
+      .select(`
+        id,
+        name,
+        email,
+        phone,
+        role,
+        degree,
+        company,
+        role_in_company,
+        avatar_url,
+        verified,
+        created_at,
+        updated_at,
+        achievements,
+        email_verified
+      `)
+      .eq("id", userId)
+      .single();
+
+    if (error) {
+      console.error("Error fetching user profile:", error);
+      throw error;
+    }
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Also fetch user's documents if they exist
+    const { data: documents, error: docError } = await supabase
+      .from("user_documents")
+      .select("*")
+      .eq("user_id", userId);
+
+    // Don't fail if documents table doesn't exist or has errors
+    const userDocuments = docError ? [] : (documents || []);
+
+    const response = {
+      ...user,
+      documents: userDocuments,
+      totalDocuments: userDocuments.length,
+      verifiedDocuments: userDocuments.filter(doc => doc.verified).length
+    };
+
+    console.log(`Fetched complete profile for user ${userId}`);
+    res.json(response);
+  } catch (error) {
+    console.error("Error in user-profile endpoint:", error);
+    res.status(500).json({ 
+      message: "Failed to fetch user profile", 
+      error: error.message 
+    });
+  }
+});
