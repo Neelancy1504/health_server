@@ -138,7 +138,7 @@ app.get("/api/doctors", async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("users")
-      .select("id, name, role, degree, achievements")
+      .select("id, name, role, degree, achievements, avatar_url") // Make sure avatar_url is included
       .eq("role", "doctor"); // Only get users with role 'doctor'
 
     if (error) throw error;
@@ -662,7 +662,6 @@ app.get("/api/chat-rooms/:userId", async (req, res) => {
 
     // Group messages by room_id and get the latest message for each room
     const roomsMap = new Map();
-
     userMessages.forEach((message) => {
       const roomId = message.room_id;
       if (
@@ -684,10 +683,10 @@ app.get("/api/chat-rooms/:userId", async (req, res) => {
       )
     );
 
-    // Fetch user details for all other users
+    // Fetch user details including avatar_url for all other users
     const { data: users, error: usersError } = await supabase
       .from("users")
-      .select("id, name, role, email")
+      .select("id, name, role, email, avatar_url") // Include avatar_url
       .in("id", otherUserIds);
 
     if (usersError) {
@@ -706,12 +705,16 @@ app.get("/api/chat-rooms/:userId", async (req, res) => {
         const otherUser = users.find((u) => u.id === otherUserId);
 
         return {
-          id: roomId, // Use room_id as the identifier
+          id: roomId,
           room_id: roomId,
           user1_id: userId,
           user2_id: otherUserId,
-          user1: { id: userId }, // Current user
-          user2: otherUser || { id: otherUserId, name: "Unknown User" },
+          user1: { id: userId },
+          user2: otherUser || { 
+            id: otherUserId, 
+            name: "Unknown User", 
+            avatar_url: null 
+          },
           last_message: {
             content: lastMessage.content,
             created_at: lastMessage.created_at,
