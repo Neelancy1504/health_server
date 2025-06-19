@@ -3,9 +3,10 @@ const router = express.Router();
 const verifyToken = require("../middleware/authMiddleware");
 const { verifyRole } = require("../middleware/roleMiddleware"); // Fixed import
 const { supabase } = require("../config/supabase");
+const notificationService = require('../services/notificationService');
 
 // Create a new private meeting (pharma only)
-router.post("/", verifyToken, verifyRole(["pharma"]), async (req, res) => {
+router.post("/", verifyToken, verifyRole(["pharma", "admin"]), async (req, res) => {
   try {
     const {
       title,
@@ -88,29 +89,25 @@ router.post("/", verifyToken, verifyRole(["pharma"]), async (req, res) => {
       throw meetingError;
     }
 
-    // Continue with invitation processing...
-    const meetingId = meeting[0].id;
-    const invitationRecords = invitedDoctors.map((doctor) => ({
-      meeting_id: meetingId,
-      doctor_id: doctor.id,
-      doctor_name: doctor.name,
-      doctor_email: doctor.email,
-    }));
-
-    // Create invitations
-    const { error: invitationError } = await supabase
-      .from("meeting_invitations")
-      .insert(invitationRecords);
-
-    if (invitationError) {
-      console.error("Error creating invitations:", invitationError);
-      throw invitationError;
+    // Notify invited doctors
+    const meetingInvitations = meeting[0].invitations || [];
+    
+    for (const invitation of meetingInvitations) {
+      await notificationService.sendToUser(invitation.doctor_id, 
+        'New Meeting Invitation', 
+        `You've been invited to a meeting: ${meeting[0].title}`, 
+        {
+          type: 'meeting_invitation',
+          id: meeting[0].id,
+          action: 'view_invitation'
+        }
+      );
     }
-
+    
     res.status(201).json({
       message: "Private meeting created and invitations sent successfully",
       meeting: meeting[0],
-      invitedDoctors: invitedDoctors.length,
+      invitedDoctors: meetingInvitations.length,
     });
   } catch (error) {
     console.error("Private meeting creation error:", error);
@@ -290,7 +287,7 @@ router.put(
       }
 
       // Update the invitation status
-      const { data, error } = await supabase
+      const { data: updatedInvitation, error } = await supabase
         .from("meeting_invitations")
         .update({
           status,
@@ -301,10 +298,22 @@ router.put(
 
       if (error) throw error;
 
-      res.json({
-        message: `Meeting invitation ${status}`,
-        invitation: data[0],
-      });
+      // Notify meeting organizer
+      const meeting = invitation.meeting_id; // Get meeting details from invitation
+      //const status = req.body.status; // 'accepted' or 'declined'
+    
+      await notificationService.sendToUser(meeting.organizer_id, 
+        `Meeting Invitation ${status === 'accepted' ? 'Accepted' : 'Declined'}`, 
+        `Dr. ${req.user.name} has ${status} your invitation to "${meeting.title}"`, 
+        {
+          type: 'invitation_response',
+          id: meeting.id,
+          action: 'view_meeting',
+          status: status
+        }
+      );
+    
+      res.json({ message: `Invitation ${status} successfully`, invitation: updatedInvitation });
     } catch (error) {
       console.error("Error updating invitation status:", error);
       res.status(500).json({ message: error.message });

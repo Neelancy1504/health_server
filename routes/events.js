@@ -3,6 +3,7 @@ const router = express.Router();
 const verifyToken = require("../middleware/authMiddleware");
 const { verifyRole } = require("../middleware/roleMiddleware"); // Fixed import - add destructuring
 const { supabase } = require("../config/supabase");
+const notificationService = require('../services/notificationService');
 
 // Get registered events for the current user
 router.get("/registered", verifyToken, async (req, res) => {
@@ -161,6 +162,17 @@ router.post("/", verifyToken, async (req, res) => {
       throw new Error(error.message);
     }
 
+    // Notify admins about new event request
+    await notificationService.sendToRole('admin', 
+      'New Event Request', 
+      `A new event "${eventData.title}" requires approval`, 
+      {
+        type: 'pending_event',
+        id: data[0].id,
+        action: 'approval'
+      }
+    );
+    
     res.status(201).json({
       message:
         req.user.role === "admin"
@@ -355,6 +367,28 @@ router.put(
         return res.status(404).json({ message: "Event not found" });
       }
 
+      // Notify event creator
+      await notificationService.sendToUser(event.created_by, 
+        'Event Approved', 
+        `Your event "${event.title}" has been approved!`, 
+        {
+          type: 'event_approval',
+          id: event.id,
+          action: 'view'
+        }
+      );
+      
+      // Notify all users about new event
+      await notificationService.sendToAll(
+        'New Event Available', 
+        `Check out the new event: ${event.title}`, 
+        {
+          type: 'new_event',
+          id: event.id,
+          action: 'view'
+        }
+      );
+      
       res.json({ message: "Event approved successfully", event });
     } catch (error) {
       console.error("Error approving event:", error);
@@ -390,6 +424,17 @@ router.put(
         return res.status(404).json({ message: "Event not found" });
       }
 
+      // Notify event creator
+      await notificationService.sendToUser(event.created_by, 
+        'Event Rejected', 
+        `Your event "${event.title}" was not approved. Reason: ${notes || 'Not specified'}`, 
+        {
+          type: 'event_rejection',
+          id: event.id,
+          action: 'view'
+        }
+      );
+      
       res.json({ message: "Event rejected successfully", event });
     } catch (error) {
       console.error("Error rejecting event:", error);

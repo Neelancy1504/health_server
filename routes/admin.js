@@ -4,6 +4,7 @@ const verifyToken = require("../middleware/authMiddleware");
 const { verifyRole, adminOnly } = require("../middleware/roleMiddleware"); // Fixed import
 const { supabase } = require("../config/supabase");
 const { validate: isUuid } = require("uuid"); // Import UUID validation library
+const notificationService = require("../services/notificationService"); // Add this import
 
 // In your health_server/routes/admin.js file:
 
@@ -301,6 +302,17 @@ router.put("/doctors/:id/verify", verifyToken, adminOnly, async (req, res) => {
       // Don't throw error here, we still verified the doctor
     }
 
+    // Notify the doctor
+    await notificationService.sendToUser(
+      req.params.id,
+      "Account Verified",
+      "Your account has been verified. You now have full access to all features.",
+      {
+        type: "account_verification",
+        action: "dashboard",
+      }
+    );
+
     const docsUpdated = documentsData ? documentsData.length : 0;
     res.json({
       message: `Doctor verified successfully. ${docsUpdated} document(s) were also verified.`,
@@ -423,6 +435,22 @@ router.put("/events/:id/approve", verifyToken, adminOnly, async (req, res) => {
       return res.status(400).json({ message: "Invalid event ID" });
     }
 
+    // First get the event details to access organizer information
+    const { data: eventDetails, error: fetchError } = await supabase
+      .from("events")
+      .select("title, organizer_id, organizer_name")
+      .eq("id", id)
+      .single();
+
+    if (fetchError) {
+      console.error("Error fetching event details:", fetchError);
+      throw new Error(fetchError.message);
+    }
+
+    if (!eventDetails) {
+      return res.status(404).json({ message: "Event not found" });
+    }
+
     // Update the event status
     const { data, error } = await supabase
       .from("events")
@@ -445,9 +473,146 @@ router.put("/events/:id/approve", verifyToken, adminOnly, async (req, res) => {
       return res.status(404).json({ message: "Event not found" });
     }
 
+    // Send notification to the event creator
+    try {
+      await notificationService.sendToUser(
+        eventDetails.organizer_id,
+        "Event Approved! 🎉",
+        `Great news! Your event "${eventDetails.title}" has been approved and is now live for registrations.`,
+        {
+          type: "event_approval",
+          id: id,
+          action: "view",
+          eventTitle: eventDetails.title,
+        }
+      );
+      console.log(
+        `Approval notification sent to user: ${eventDetails.organizer_id}`
+      );
+    } catch (notificationError) {
+      console.error("Error sending approval notification:", notificationError);
+      // Don't fail the approval if notification fails
+    }
+
+    // Also notify all users about the new approved event
+    try {
+      await notificationService.sendToRole(
+        "doctor",
+        "New Event Available! 📅",
+        `Check out the new event: "${eventDetails.title}"`,
+        {
+          type: "new_event",
+          id: id,
+          action: "view",
+          eventTitle: eventDetails.title,
+        }
+      );
+
+      await notificationService.sendToRole(
+        "pharma",
+        "New Event Available! 📅",
+        `Check out the new event: "${eventDetails.title}"`,
+        {
+          type: "new_event",
+          id: id,
+          action: "view",
+          eventTitle: eventDetails.title,
+        }
+      );
+      console.log(`New event notifications sent to all users`);
+    } catch (notificationError) {
+      console.error(
+        "Error sending new event notifications:",
+        notificationError
+      );
+      // Don't fail the approval if notification fails
+    }
+
     res.json({ message: "Event approved successfully", event: data });
   } catch (error) {
     console.error("Error in approve event route:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Add this route after the approve route if it doesn't exist already
+router.put("/events/:id/reject", verifyToken, adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { notes } = req.body;
+
+    // Validate the ID
+    if (!id || id === "undefined" || !isUuid(id)) {
+      console.error("Invalid event ID:", id);
+      return res.status(400).json({ message: "Invalid event ID" });
+    }
+
+    // First get the event details to access organizer information
+    const { data: eventDetails, error: fetchError } = await supabase
+      .from("events")
+      .select("title, organizer_id, organizer_name")
+      .eq("id", id)
+      .single();
+
+    if (fetchError) {
+      console.error("Error fetching event details:", fetchError);
+      throw new Error(fetchError.message);
+    }
+
+    if (!eventDetails) {
+      return res.status(404).json({ message: "Event not found" });
+    }
+
+    // Update the event status to rejected
+    const { data, error } = await supabase
+      .from("events")
+      .update({
+        status: "rejected",
+        verification_notes: notes || "Event was rejected by admin",
+        verified_by: req.user.id,
+        verified_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Supabase error:", error);
+      throw new Error(error.message);
+    }
+
+    if (!data) {
+      return res.status(404).json({ message: "Event not found" });
+    }
+
+    // Send notification to the event creator
+    try {
+      await notificationService.sendToUser(
+        eventDetails.organizer_id,
+        "Event Update Required ⚠️",
+        `Your event "${
+          eventDetails.title
+        }" needs some changes before approval. ${
+          notes ? `Reason: ${notes}` : "Please review and resubmit."
+        }`,
+        {
+          type: "event_rejection",
+          id: id,
+          action: "view",
+          eventTitle: eventDetails.title,
+        }
+      );
+      console.log(
+        `Rejection notification sent to user: ${eventDetails.organizer_id}`
+      );
+    } catch (notificationError) {
+      console.error("Error sending rejection notification:", notificationError);
+      // Don't fail the rejection if notification fails
+    }
+
+    res.json({ message: "Event rejected successfully", event: data });
+  } catch (error) {
+    console.error("Error in reject event route:", error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -509,6 +674,19 @@ router.put("/doctors/:id/reject", verifyToken, adminOnly, async (req, res) => {
     if (!data) {
       return res.status(404).json({ message: "Doctor not found" });
     }
+
+    // Notify the doctor
+    //const notes = req.body.notes || "No reason provided";
+
+    await notificationService.sendToUser(
+      req.params.id,
+      "Verification Failed",
+      `Your account verification was unsuccessful. Reason: ${notes}`,
+      {
+        type: "account_rejection",
+        action: "verification",
+      }
+    );
 
     res.json({ message: "Doctor verification rejected" });
   } catch (error) {
