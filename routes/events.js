@@ -3,7 +3,7 @@ const router = express.Router();
 const verifyToken = require("../middleware/authMiddleware");
 const { verifyRole } = require("../middleware/roleMiddleware"); // Fixed import - add destructuring
 const { supabase } = require("../config/supabase");
-const notificationService = require('../services/notificationService');
+const notificationService = require("../services/notificationService");
 
 // Get registered events for the current user
 router.get("/registered", verifyToken, async (req, res) => {
@@ -163,16 +163,17 @@ router.post("/", verifyToken, async (req, res) => {
     }
 
     // Notify admins about new event request
-    await notificationService.sendToRole('admin', 
-      'New Event Request', 
-      `A new event "${eventData.title}" requires approval`, 
+    await notificationService.sendToRole(
+      "admin",
+      "New Event Request",
+      `A new event "${eventData.title}" requires approval`,
       {
-        type: 'pending_event',
+        type: "pending_event",
         id: data[0].id,
-        action: 'approval'
+        action: "approval",
       }
     );
-    
+
     res.status(201).json({
       message:
         req.user.role === "admin"
@@ -200,6 +201,82 @@ router.get("/", async (req, res) => {
     res.json(events);
   } catch (error) {
     console.error("Error fetching events:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Add endpoint to get pharma's sponsorship requests
+router.get("/sponsorship-requests", verifyToken, async (req, res) => {
+  try {
+    // Different query based on user role
+    if (req.user.role === "pharma") {
+      // Get requests for this pharma user
+      const { data, error } = await supabase
+        .from("sponsorship_requests")
+        .select(
+          `
+          *,
+          events(id, title, description, start_date, end_date, mode, venue, organizer_name)
+        `
+        )
+        .eq("pharma_id", req.user.id)
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      res.json(data);
+    } else if (req.user.role === "doctor") {
+      // Get requests created by this doctor
+      const { data: events, error: eventsError } = await supabase
+        .from("events")
+        .select("id")
+        .eq("organizer_id", req.user.id);
+
+      if (eventsError) throw eventsError;
+
+      if (events.length === 0) {
+        return res.json([]);
+      }
+
+      const eventIds = events.map((e) => e.id);
+
+      const { data, error } = await supabase
+        .from("sponsorship_requests")
+        .select(
+          `
+          *,
+          events(id, title),
+          pharma:pharma_id(id, name, company, email)
+        `
+        )
+        .in("event_id", eventIds)
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      res.json(data);
+    } else {
+      return res.status(403).json({ message: "Unauthorized" });
+    }
+  } catch (error) {
+    console.error("Error fetching sponsorship requests:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Add this new endpoint to fetch pharma companies
+router.get("/pharma-companies", verifyToken, async (req, res) => {
+  try {
+    // Get all verified pharma users
+    const { data, error } = await supabase
+      .from("users")
+      .select("id, name, company")
+      .eq("role", "pharma")
+      .eq("verified", true);
+
+    if (error) throw error;
+
+    res.json(data);
+  } catch (error) {
+    console.error("Error fetching pharma companies:", error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -368,27 +445,28 @@ router.put(
       }
 
       // Notify event creator
-      await notificationService.sendToUser(event.created_by, 
-        'Event Approved', 
-        `Your event "${event.title}" has been approved!`, 
+      await notificationService.sendToUser(
+        event.created_by,
+        "Event Approved",
+        `Your event "${event.title}" has been approved!`,
         {
-          type: 'event_approval',
+          type: "event_approval",
           id: event.id,
-          action: 'view'
+          action: "view",
         }
       );
-      
+
       // Notify all users about new event
       await notificationService.sendToAll(
-        'New Event Available', 
-        `Check out the new event: ${event.title}`, 
+        "New Event Available",
+        `Check out the new event: ${event.title}`,
         {
-          type: 'new_event',
+          type: "new_event",
           id: event.id,
-          action: 'view'
+          action: "view",
         }
       );
-      
+
       res.json({ message: "Event approved successfully", event });
     } catch (error) {
       console.error("Error approving event:", error);
@@ -425,16 +503,19 @@ router.put(
       }
 
       // Notify event creator
-      await notificationService.sendToUser(event.created_by, 
-        'Event Rejected', 
-        `Your event "${event.title}" was not approved. Reason: ${notes || 'Not specified'}`, 
+      await notificationService.sendToUser(
+        event.created_by,
+        "Event Rejected",
+        `Your event "${event.title}" was not approved. Reason: ${
+          notes || "Not specified"
+        }`,
         {
-          type: 'event_rejection',
+          type: "event_rejection",
           id: event.id,
-          action: 'view'
+          action: "view",
         }
       );
-      
+
       res.json({ message: "Event rejected successfully", event });
     } catch (error) {
       console.error("Error rejecting event:", error);
@@ -833,5 +914,193 @@ router.get("/:id/brochure", async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 });
+
+// Add sponsorship request table in your database
+// Run this SQL in your Supabase SQL editor
+/*
+CREATE TABLE IF NOT EXISTS sponsorship_requests (
+  id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
+  event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  pharma_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending', -- pending, accepted, declined
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  CONSTRAINT unique_sponsorship_request UNIQUE(event_id, pharma_id)
+);
+*/
+
+// Add this endpoint to create sponsorship requests
+router.post("/:id/sponsorship-requests", verifyToken, async (req, res) => {
+  try {
+    const eventId = req.params.id;
+    const { pharmaIds } = req.body;
+
+    if (!Array.isArray(pharmaIds) || pharmaIds.length === 0) {
+      return res.status(400).json({ message: "No pharma companies selected" });
+    }
+
+    // Check if event exists and belongs to the user
+    const { data: event, error: eventError } = await supabase
+      .from("events")
+      .select("*")
+      .eq("id", eventId)
+      .eq("organizer_id", req.user.id)
+      .single();
+
+    if (eventError || !event) {
+      return res
+        .status(404)
+        .json({ message: "Event not found or unauthorized" });
+    }
+
+    // Create sponsorship requests
+    const requests = pharmaIds.map((pharmaId) => ({
+      event_id: eventId,
+      pharma_id: pharmaId,
+      status: "pending",
+    }));
+
+    const { data, error } = await supabase
+      .from("sponsorship_requests")
+      .upsert(requests, { onConflict: "event_id,pharma_id" });
+
+    if (error) throw error;
+
+    // Send notifications to pharma companies
+    for (const pharmaId of pharmaIds) {
+      await notificationService.sendToUser(
+        pharmaId,
+        "Sponsorship Request",
+        `You've been invited to sponsor the event: ${event.title}`,
+        {
+          type: "sponsorship_request",
+          id: eventId,
+          action: "respond",
+        }
+      );
+    }
+
+    res.status(201).json({
+      message: "Sponsorship requests sent successfully",
+      requests: data,
+    });
+  } catch (error) {
+    console.error("Error creating sponsorship requests:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Add endpoint for pharma to respond to sponsorship requests
+router.put(
+  "/sponsorship-requests/:requestId",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const { requestId } = req.params;
+      const { status } = req.body;
+
+      if (!status || !["accepted", "declined"].includes(status)) {
+        return res.status(400).json({ message: "Invalid status" });
+      }
+
+      // Check if request exists and belongs to the pharma user
+      const { data: request, error: requestError } = await supabase
+        .from("sponsorship_requests")
+        .select("*, events(title, organizer_id, organizer_name)")
+        .eq("id", requestId)
+        .eq("pharma_id", req.user.id)
+        .single();
+
+      if (requestError || !request) {
+        return res
+          .status(404)
+          .json({ message: "Sponsorship request not found" });
+      }
+
+      // Update request status
+      const { data, error } = await supabase
+        .from("sponsorship_requests")
+        .update({
+          status,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", requestId)
+        .select();
+
+      if (error) throw error;
+
+      // If accepted, add pharma as sponsor to the event
+      if (status === "accepted") {
+        // Get current event data
+        const { data: eventData, error: eventError } = await supabase
+          .from("events")
+          .select("sponsors")
+          .eq("id", request.event_id)
+          .single();
+
+        if (eventError) throw eventError;
+
+        // Add pharma to sponsors list
+        const currentSponsors = eventData.sponsors || [];
+        const newSponsor = {
+          id: Date.now().toString(),
+          name: req.user.company || req.user.name, // Add name property with company or user name
+          level: "Standard",
+          contactPerson: req.user.name,
+          contactEmail: req.user.email,
+          contactPhone: req.user.phone || null,
+          pharma_id: req.user.id,
+          approved: true,
+        };
+
+        // Update event with new sponsor
+        await supabase
+          .from("events")
+          .update({
+            sponsors: [...currentSponsors, newSponsor],
+          })
+          .eq("id", request.event_id);
+
+        // Notify event organizer
+        await notificationService.sendToUser(
+          request.events.organizer_id,
+          "Sponsorship Accepted",
+          `${
+            req.user.company || req.user.name
+          } has accepted your sponsorship request for ${request.events.title}`,
+          {
+            type: "sponsorship_response",
+            id: request.event_id,
+            action: "view",
+            status: "accepted",
+          }
+        );
+      } else {
+        // Notify event organizer of declined sponsorship
+        await notificationService.sendToUser(
+          request.events.organizer_id,
+          "Sponsorship Declined",
+          `${
+            req.user.company || req.user.name
+          } has declined your sponsorship request for ${request.events.title}`,
+          {
+            type: "sponsorship_response",
+            id: request.event_id,
+            action: "view",
+            status: "declined",
+          }
+        );
+      }
+
+      res.json({
+        message: `Sponsorship request ${status} successfully`,
+        request: data[0],
+      });
+    } catch (error) {
+      console.error("Error responding to sponsorship request:", error);
+      res.status(500).json({ message: error.message });
+    }
+  }
+);
 
 module.exports = router;
