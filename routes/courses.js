@@ -357,42 +357,58 @@ router.get("/:courseId/discussions", async (req, res) => {
 
     console.log('Getting discussions for course:', courseId, 'video:', video_id);
 
-    let query = supabase
+    // Use a more explicit approach to avoid foreign key relationship issues
+    const { data: discussions, error } = await supabase
       .from("course_discussions")
-      .select(`
-        *,
-        user:user_id(name, role)
-      `)
-      .eq("course_id", courseId);
-
-    // ONLY filter by video_id if it's explicitly provided and valid
-    if (video_id && video_id !== 'null' && video_id !== 'undefined') {
-      console.log('Filtering by video_id:', video_id);
-      query = query.eq("video_id", video_id);
-    }
-    // If no video_id is provided, show ALL discussions (original behavior)
-
-    const { data, error } = await query.order("created_at", { ascending: false });
+      .select("*")
+      .eq("course_id", courseId)
+      .order("created_at", { ascending: false });
 
     if (error) {
       console.error('Database error:', error);
       throw error;
     }
 
-    console.log('Found discussions:', data?.length || 0);
+    // Filter by video_id if provided
+    let filteredDiscussions = discussions;
+    if (video_id && video_id !== 'null' && video_id !== 'undefined') {
+      filteredDiscussions = discussions.filter(d => d.video_id === video_id);
+    }
 
-    // Format the response
-    const formattedDiscussions = data.map((discussion) => ({
+    // Get user information separately to avoid foreign key issues
+    const userIds = [...new Set(filteredDiscussions.map(d => d.user_id))];
+    const { data: users, error: userError } = await supabase
+      .from("users")
+      .select("id, name, role, avatar_url")
+      .in("id", userIds);
+
+    if (userError) {
+      console.error('User fetch error:', userError);
+      // Continue without user data instead of failing
+    }
+
+    // Create a user lookup map
+    const userMap = {};
+    if (users) {
+      users.forEach(user => {
+        userMap[user.id] = user;
+      });
+    }
+
+    // Format the response with user data
+    const formattedDiscussions = filteredDiscussions.map((discussion) => ({
       id: discussion.id,
       content: discussion.content,
       created_at: discussion.created_at,
       user_id: discussion.user_id,
       parent_id: discussion.parent_id,
       video_id: discussion.video_id,
-      user_name: discussion.user?.name || "Unknown User",
-      role: discussion.user?.role,
+      user_name: userMap[discussion.user_id]?.name || "Unknown User",
+      user_avatar: userMap[discussion.user_id]?.avatar_url || null,
+      role: userMap[discussion.user_id]?.role || null,
     }));
 
+    console.log('Returning discussions:', formattedDiscussions.length);
     res.json(formattedDiscussions);
   } catch (error) {
     console.error("Error fetching course discussions:", error);
@@ -519,5 +535,225 @@ router.delete(
     }
   }
 );
+
+// Get course comments - Fixed to join tables manually
+router.get("/:courseId/comments", async (req, res) => {
+  try {
+    const { courseId } = req.params;
+
+    // Using join instead of nested select
+    const { data, error } = await supabase
+      .from("course_comments")
+      .select(`*, user:users!course_comments_user_id_fkey(name, avatar_url)`)
+      .eq("course_id", courseId)
+      .is("video_id", null)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Database error:", error);
+      throw error;
+    }
+
+    // Format the response
+    const formattedComments = data.map(comment => ({
+      ...comment,
+      user_name: comment.user?.name || "Unknown User",
+      user_avatar: comment.user?.avatar_url || null,
+    }));
+
+    // Remove the user object to avoid duplication
+    formattedComments.forEach(comment => {
+      delete comment.user;
+    });
+
+    res.json(formattedComments);
+  } catch (error) {
+    console.error("Error getting course comments:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Get video comments - Fixed to join tables manually
+router.get("/:courseId/videos/:videoId/comments", async (req, res) => {
+  try {
+    const { courseId, videoId } = req.params;
+
+    // Using join instead of nested select
+    const { data, error } = await supabase
+      .from("course_comments")
+      .select(`*, user:users!course_comments_user_id_fkey(name, avatar_url)`)
+      .eq("course_id", courseId)
+      .eq("video_id", videoId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Database error:", error);
+      throw error;
+    }
+
+    // Format the response
+    const formattedComments = data.map(comment => ({
+      ...comment,
+      user_name: comment.user?.name || "Unknown User",
+      user_avatar: comment.user?.avatar_url || null,
+    }));
+
+    // Remove the user object to avoid duplication
+    formattedComments.forEach(comment => {
+      delete comment.user;
+    });
+
+    res.json(formattedComments);
+  } catch (error) {
+    console.error("Error getting video comments:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Add course comment
+router.post("/:courseId/comments", verifyToken, async (req, res) => {
+  try {
+    const { courseId } = req.params;
+    const { content } = req.body;
+    const userId = req.user.id;
+
+    if (!content || !content.trim()) {
+      return res.status(400).json({ message: "Comment content is required" });
+    }
+
+    // First insert the comment
+    const { data, error } = await supabase
+      .from("course_comments")
+      .insert({
+        course_id: courseId,
+        user_id: userId,
+        content: content.trim(),
+        video_id: null,
+      })
+      .select();
+
+    if (error) throw error;
+
+    if (!data || data.length === 0) {
+      throw new Error("Failed to insert comment");
+    }
+
+    // Then fetch user info to return complete comment data
+    const { data: userData, error: userError } = await supabase
+      .from("users")
+      .select("name, avatar_url")
+      .eq("id", userId)
+      .single();
+
+    if (userError) throw userError;
+
+    // Format the response
+    const comment = {
+      ...data[0],
+      user_name: userData?.name || "Unknown User",
+      user_avatar: userData?.avatar_url || null,
+    };
+
+    res.status(201).json(comment);
+  } catch (error) {
+    console.error("Error adding course comment:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Add video comment
+router.post("/:courseId/videos/:videoId/comments", verifyToken, async (req, res) => {
+  try {
+    const { courseId, videoId } = req.params;
+    const { content } = req.body;
+    const userId = req.user.id;
+
+    if (!content || !content.trim()) {
+      return res.status(400).json({ message: "Comment content is required" });
+    }
+
+    // First insert the comment
+    const { data, error } = await supabase
+      .from("course_comments")
+      .insert({
+        course_id: courseId,
+        video_id: videoId,
+        user_id: userId,
+        content: content.trim(),
+      })
+      .select();
+
+    if (error) throw error;
+
+    if (!data || data.length === 0) {
+      throw new Error("Failed to insert comment");
+    }
+
+    // Then fetch user info to return complete comment data
+    const { data: userData, error: userError } = await supabase
+      .from("users")
+      .select("name, avatar_url")
+      .eq("id", userId)
+      .single();
+
+    if (userError) throw userError;
+
+    // Format the response
+    const comment = {
+      ...data[0],
+      user_name: userData?.name || "Unknown User",
+      user_avatar: userData?.avatar_url || null,
+    };
+
+    res.status(201).json(comment);
+  } catch (error) {
+    console.error("Error adding video comment:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post("/:courseId/presence", async (req, res) => {
+  try {
+    const { courseId } = req.params;
+    const { videoId, userId, isOnline } = req.body;
+    
+    if (isOnline) {
+      // Upsert user presence
+      const { error } = await supabase
+        .from("user_presence")
+        .upsert({
+          user_id: userId,
+          course_id: courseId,
+          video_id: videoId || null,
+          last_seen: new Date().toISOString(),
+          is_online: true
+        });
+      if (error) {
+        console.error("Error upserting presence:", error);
+        return res.status(500).json({ message: "Failed to update presence" });
+      }
+
+      return res.status(200).json({ message: "Presence updated" });
+    } else {
+      // Mark user as offline
+      const { error } = await supabase
+        .from("user_presence")
+        .update({ is_online: false })
+        .eq("user_id", userId)
+        .eq("course_id", courseId)
+        .eq("video_id", videoId || null);
+
+      if (error) {
+        console.error("Error updating presence:", error);
+        return res.status(500).json({ message: "Failed to update presence" });
+      }
+
+      return res.status(200).json({ message: "User marked as offline" });
+    }
+  } catch (error) {
+    console.error("Error updating user presence:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
 
 module.exports = router;
