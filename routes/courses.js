@@ -422,7 +422,7 @@ router.post("/:courseId/discussions", verifyToken, async (req, res) => {
     const { courseId } = req.params;
     const { content, parent_id, video_id } = req.body;
     const userId = req.user.id;
-
+    
     console.log('Adding discussion:', {
       courseId,
       userId,
@@ -445,17 +445,37 @@ router.post("/:courseId/discussions", verifyToken, async (req, res) => {
       });
     }
 
-    // If parent_id provided, verify it exists
+    // For replies: Check if parent comment exists and get its author
+    let parentAuthorId = null;
     if (parent_id) {
       const { data: parentComment, error: parentError } = await supabase
         .from("course_discussions")
-        .select("id")
+        .select("id, user_id")
         .eq("id", parent_id)
         .eq("course_id", courseId)
         .single();
 
       if (parentError || !parentComment) {
         return res.status(400).json({ message: "Parent comment not found" });
+      }
+      
+      parentAuthorId = parentComment.user_id;
+    } 
+    // For top-level comments: Get course creator ID
+    else {
+      // Get course creator ID for notification
+      const { data: courseData, error: courseError } = await supabase
+        .from("courses")
+        .select("creator_id, title")
+        .eq("id", courseId)
+        .single();
+        
+      if (courseError) {
+        console.error("Error fetching course data:", courseError);
+      } else if (courseData) {
+        // Store course info for notification
+        courseCreatorId = courseData.creator_id;
+        courseTitle = courseData.title;
       }
     }
 
@@ -465,7 +485,7 @@ router.post("/:courseId/discussions", verifyToken, async (req, res) => {
       user_id: userId,
       content,
       parent_id: parent_id || null,
-      video_id: video_id || null, // Will be null for course discussions, video ID for video discussions
+      video_id: video_id || null,
     };
 
     const { data, error } = await supabase
@@ -480,6 +500,47 @@ router.post("/:courseId/discussions", verifyToken, async (req, res) => {
     }
 
     console.log('Successfully added discussion:', data);
+
+    // NOTIFICATION SYSTEM
+    try {
+      const notificationService = require('../services/notificationService');
+      
+      // 1. If this is a reply, notify the original comment author
+      if (parent_id && parentAuthorId && parentAuthorId !== userId) {
+        await notificationService.sendToUser(
+          parentAuthorId,
+          "New Reply to Your Comment",
+          `${userData.name} replied to your comment in ${courseTitle || "a course"}`,
+          {
+            type: "course_comment_reply",
+            id: courseId,
+            comment_id: data.id,
+            video_id: video_id || null,
+            action: "view_discussion"
+          }
+        );
+        console.log(`Notification sent to comment author: ${parentAuthorId}`);
+      } 
+      // 2. If this is a new comment, notify the course creator
+      else if (!parent_id && courseCreatorId && courseCreatorId !== userId) {
+        await notificationService.sendToUser(
+          courseCreatorId,
+          "New Comment on Your Course",
+          `${userData.name} commented on your course: ${courseTitle || "your course"}`,
+          {
+            type: "course_new_comment",
+            id: courseId,
+            comment_id: data.id,
+            video_id: video_id || null,
+            action: "view_discussion"
+          }
+        );
+        console.log(`Notification sent to course creator: ${courseCreatorId}`);
+      }
+    } catch (notificationError) {
+      // Don't fail the comment creation if notification fails
+      console.error("Error sending notification:", notificationError);
+    }
 
     // Return the discussion with user data
     const response = {
