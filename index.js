@@ -8,7 +8,7 @@ const { Server } = require("socket.io");
 const fileUpload = require("express-fileupload");
 const verifyToken = require("./middleware/authMiddleware");
 const { adminOnly } = require("./middleware/roleMiddleware");
-const notificationService = require('./services/notificationService');
+const notificationService = require("./services/notificationService");
 
 // Update the ADMIN_SUPPORT_ID to use a real admin UUID
 // Use Sahil bhai's ID from your database
@@ -322,25 +322,83 @@ app.post("/api/messages", async (req, res) => {
       // Send notification to receiver
       const receiverId = messageData.receiver_id || messageData.receiverId;
       const senderId = messageData.sender_id || messageData.senderId;
-      const senderName = messageData.sender_name || messageData.senderName || 'Someone';
-      const isAttachment = messageData.isAttachment || false;
-      
-      const content = isAttachment 
+      const senderName =
+        messageData.sender_name || messageData.senderName || "Someone";
+      const isAttachment =
+        messageData.isAttachment || messageData.is_attachment || false;
+
+      const content = isAttachment
         ? `${senderName} sent you a file`
-        : messageData.content || messageData.text || 'New message';
-      
+        : messageData.content || messageData.text || "New message";
+
       // Only send notification if receiver is not the sender
       if (receiverId !== senderId) {
-        await notificationService.sendToUser(receiverId, 
-          `Message from ${senderName}`, 
-          content, 
-          {
-            type: 'chat_message',
-            id: senderId,
-            room_id: messageData.room_id || messageData.roomId,
-            action: 'open_chat'
-          }
+        console.log(
+          `📣 Preparing notification for message from ${senderName} to ${receiverId}`
         );
+
+        // Enhanced notification data - UPDATED FORMAT
+        const notificationData = {
+          type: "chat_message",
+          id: senderId,
+          sender_id: senderId,
+          senderName: senderName,
+          sender_name: senderName, // Add both formats for consistency
+          room_id: savedMessage.room_id,
+          roomId: savedMessage.room_id, // Add both formats for consistency
+          action: "open_chat",
+          click_action: "FLUTTER_NOTIFICATION_CLICK",
+          priority: "high",
+          channel_id: "chat_messages", // Add channel ID
+          // Add message content/preview
+          message_preview: content.substring(0, 100),
+          // Add timestamp
+          timestamp: new Date().toISOString(),
+        };
+
+        console.log(
+          "📦 Chat notification data:",
+          JSON.stringify(notificationData, null, 2)
+        );
+
+        // Add this before sending the notification
+
+        // Check if user has FCM tokens
+        const { data: userTokens, error: tokenError } = await supabase
+          .from("user_fcm_tokens")
+          .select("fcm_token")
+          .eq("user_id", receiverId);
+
+        console.log(
+          `📱 User ${receiverId} has ${userTokens?.length || 0} FCM tokens`
+        );
+        if (tokenError) {
+          console.error("❌ Error fetching user FCM tokens:", tokenError);
+        }
+
+        if (!userTokens || userTokens.length === 0) {
+          console.log(
+            `⚠️ No FCM tokens found for user ${receiverId}, cannot send notification`
+          );
+          // Continue with message sending but skip notification
+        } else {
+          // Send notification as before
+          try {
+            const notificationResult = await notificationService.sendToUser(
+              receiverId,
+              `Message from ${senderName}`,
+              content,
+              notificationData
+            );
+
+            console.log("📬 Chat notification result:", notificationResult);
+          } catch (notificationError) {
+            console.error(
+              "❌ Error sending chat notification:",
+              notificationError
+            );
+          }
+        }
       }
 
       res.status(201).json({
@@ -561,6 +619,78 @@ io.on("connection", (socket) => {
 
       // Confirm to sender
       socket.emit("message_confirmed", messageToEmit);
+
+      // --- ADD THIS BLOCK FOR NOTIFICATIONS ---
+      // Send notification to receiver
+      const receiverId = messageData.receiver_id || messageData.receiverId;
+      const senderId = messageData.sender_id || messageData.senderId;
+      const senderName =
+        messageData.sender_name || messageData.senderName || "Someone";
+      const isAttachment =
+        messageData.isAttachment || messageData.is_attachment || false;
+
+      const content = isAttachment
+        ? `${senderName} sent you a file`
+        : messageData.content || messageData.text || "New message";
+
+      // Only send notification if receiver is not the sender
+      if (receiverId !== senderId) {
+        console.log(
+          `📣 Preparing notification for message from ${senderName} to ${receiverId}`
+        );
+
+        // Enhanced notification data
+        const notificationData = {
+          type: "chat_message",
+          id: senderId,
+          sender_id: senderId,
+          senderName: senderName,
+          sender_name: senderName,
+          room_id: messageData.room_id || messageData.roomId,
+          roomId: messageData.room_id || messageData.roomId,
+          action: "open_chat",
+          click_action: "FLUTTER_NOTIFICATION_CLICK",
+          priority: "high",
+          channel_id: "chat_messages",
+          message_preview: content.substring(0, 100),
+          timestamp: new Date().toISOString(),
+        };
+
+        // Check if user has FCM tokens
+        const { data: userTokens, error: tokenError } = await supabase
+          .from("user_fcm_tokens")
+          .select("fcm_token")
+          .eq("user_id", receiverId);
+
+        console.log(
+          `📱 User ${receiverId} has ${userTokens?.length || 0} FCM tokens`
+        );
+        if (tokenError) {
+          console.error("❌ Error fetching user FCM tokens:", tokenError);
+        }
+
+        if (!userTokens || userTokens.length === 0) {
+          console.log(
+            `⚠️ No FCM tokens found for user ${receiverId}, cannot send notification`
+          );
+        } else {
+          try {
+            const notificationResult = await notificationService.sendToUser(
+              receiverId,
+              `Message from ${senderName}`,
+              content,
+              notificationData
+            );
+            console.log("📬 Chat notification result:", notificationResult);
+          } catch (notificationError) {
+            console.error(
+              "❌ Error sending chat notification:",
+              notificationError
+            );
+          }
+        }
+      }
+      // --- END BLOCK ---
     } catch (error) {
       console.error("Error saving message via socket:", error);
       socket.emit("message_error", {
@@ -735,10 +865,10 @@ app.get("/api/chat-rooms/:userId", async (req, res) => {
           user1_id: userId,
           user2_id: otherUserId,
           user1: { id: userId },
-          user2: otherUser || { 
-            id: otherUserId, 
-            name: "Unknown User", 
-            avatar_url: null 
+          user2: otherUser || {
+            id: otherUserId,
+            name: "Unknown User",
+            avatar_url: null,
           },
           last_message: {
             content: lastMessage.content,
@@ -1305,11 +1435,12 @@ app.get("/api/admin/debug", verifyToken, adminOnly, async (req, res) => {
 app.get("/api/user-profile/:userId", verifyToken, async (req, res) => {
   try {
     const { userId } = req.params;
-    
+
     // Fetch complete user details including all signup information
     const { data: user, error } = await supabase
       .from("users")
-      .select(`
+      .select(
+        `
         id,
         name,
         email,
@@ -1324,7 +1455,8 @@ app.get("/api/user-profile/:userId", verifyToken, async (req, res) => {
         updated_at,
         achievements,
         email_verified
-      `)
+      `
+      )
       .eq("id", userId)
       .single();
 
@@ -1344,22 +1476,148 @@ app.get("/api/user-profile/:userId", verifyToken, async (req, res) => {
       .eq("user_id", userId);
 
     // Don't fail if documents table doesn't exist or has errors
-    const userDocuments = docError ? [] : (documents || []);
+    const userDocuments = docError ? [] : documents || [];
 
     const response = {
       ...user,
       documents: userDocuments,
       totalDocuments: userDocuments.length,
-      verifiedDocuments: userDocuments.filter(doc => doc.verified).length
+      verifiedDocuments: userDocuments.filter((doc) => doc.verified).length,
     };
 
     console.log(`Fetched complete profile for user ${userId}`);
     res.json(response);
   } catch (error) {
     console.error("Error in user-profile endpoint:", error);
-    res.status(500).json({ 
-      message: "Failed to fetch user profile", 
-      error: error.message 
+    res.status(500).json({
+      message: "Failed to fetch user profile",
+      error: error.message,
     });
+  }
+});
+
+// Add this route to your Express app near your other API routes
+
+// Test notification endpoint
+app.post("/api/test-notification", verifyToken, async (req, res) => {
+  try {
+    const { fcmToken } = req.body;
+
+    if (!fcmToken) {
+      return res.status(400).json({
+        success: false,
+        message: "FCM token is required",
+      });
+    }
+
+    console.log(
+      "🧪 Testing FCM notification with token:",
+      fcmToken.substring(0, 15) + "..."
+    );
+
+    // Use your notification service to send a test message
+    const result = await notificationService.sendToTokens(
+      [fcmToken],
+      "Test Notification",
+      "This is a test notification from MedEvent",
+      {
+        type: "test_notification",
+        action: "open_app",
+        id: req.user.id,
+        sender_id: req.user.id,
+        sender_name: req.user.name || "System",
+        timestamp: new Date().toISOString(),
+      }
+    );
+
+    res.json({
+      success: true,
+      message: "Test notification sent",
+      result,
+    });
+  } catch (error) {
+    console.error("Error sending test notification:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to send test notification",
+      error: error.message,
+    });
+  }
+});
+
+// Add this route to verify FCM tokens
+app.post("/api/verify-fcm-token", verifyToken, async (req, res) => {
+  try {
+    const { fcmToken } = req.body;
+    const userId = req.user.id;
+
+    if (!fcmToken) {
+      return res
+        .status(400)
+        .json({ success: false, message: "FCM token is required" });
+    }
+
+    // Check if token exists in database
+    const { data, error } = await supabase
+      .from("user_fcm_tokens")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("fcm_token", fcmToken)
+      .single();
+
+    if (error) {
+      console.error("Error verifying FCM token:", error);
+      return res
+        .status(500)
+        .json({
+          success: false,
+          message: "Database error",
+          error: error.message,
+        });
+    }
+
+    if (!data) {
+      console.log(`Token not found in database for user ${userId}`);
+
+      // Try to register it now
+      const { error: insertError } = await supabase
+        .from("user_fcm_tokens")
+        .insert({
+          user_id: userId,
+          fcm_token: fcmToken,
+          device_type: req.body.device_type || "unknown",
+          created_at: new Date().toISOString(),
+        });
+
+      if (insertError) {
+        return res.status(500).json({
+          success: false,
+          message: "Token not found and failed to register",
+          error: insertError.message,
+        });
+      }
+
+      return res.json({
+        success: true,
+        found: false,
+        message: "Token not found but has been registered now",
+      });
+    }
+
+    // Token exists
+    return res.json({
+      success: true,
+      found: true,
+      message: "FCM token verified",
+      data: {
+        registered_at: data.created_at,
+        device_type: data.device_type,
+      },
+    });
+  } catch (error) {
+    console.error("Verification error:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Server error", error: error.message });
   }
 });
