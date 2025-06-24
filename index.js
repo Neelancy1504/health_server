@@ -1286,19 +1286,34 @@ app.get("/", (req, res) => {
 
 // Serve static assets in production
 if (process.env.NODE_ENV === "production") {
-  // Set static folder
-  const clientBuildPath = path.join(__dirname, "../client/build");
-
-  if (fs.existsSync(clientBuildPath)) {
-    app.use(express.static(clientBuildPath));
-
-    app.get("*", (req, res) => {
-      res.sendFile(path.resolve(__dirname, "../client", "build", "index.html"));
+  // For Railway - we don't need to serve static client files
+  // This is an API-only server
+  console.log("✅ Production mode: API server running");
+  
+  // Add a simple root route for health check
+  app.get("/", (req, res) => {
+    res.json({
+      message: "MedEvent API Server",
+      status: "online",
+      timestamp: new Date().toISOString()
     });
-  } else {
-    console.warn("Client build folder not found.");
-  }
+  });
+} else {
+  console.log("Development mode");
 }
+
+// Remove or comment out the static file serving code that's causing issues:
+/*
+const clientBuildPath = path.join(__dirname, "../client/build");
+if (fs.existsSync(clientBuildPath)) {
+  app.use(express.static(clientBuildPath));
+  app.get("*", (req, res) => {
+    res.sendFile(path.join(clientBuildPath, "index.html"));
+  });
+} else {
+  console.warn("Client build folder not found."); // This was your error
+}
+*/
 
 // Set port
 const PORT = process.env.PORT || 5000;
@@ -1525,7 +1540,7 @@ app.post("/api/test-notification", verifyToken, async (req, res) => {
         action: "open_app",
         id: req.user.id,
         sender_id: req.user.id,
-        sender_name: req.user.name || "System",
+        sender_name: req.user.name,
         timestamp: new Date().toISOString(),
       }
     );
