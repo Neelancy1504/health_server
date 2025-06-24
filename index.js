@@ -1316,7 +1316,12 @@ if (fs.existsSync(clientBuildPath)) {
 */
 
 // Set port
-const PORT = 8081;
+const PORT = process.env.PORT || 8081;
+
+// For Railway deployment
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`✅ Server running on http://0.0.0.0:${PORT}`);
+});
 
 // Server listening logic for local development
 // if (process.env.NODE_ENV !== "production") {
@@ -1327,7 +1332,7 @@ const PORT = 8081;
 // }
 
 // For Vercel serverless deployment
-module.exports = app;
+//module.exports = app;
 
 // Add these endpoints after your existing routes
 
