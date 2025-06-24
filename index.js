@@ -1316,7 +1316,7 @@ if (fs.existsSync(clientBuildPath)) {
 */
 
 // Set port
-//const PORT = process.env.PORT || 5000;
+const PORT = 8081;
 
 // Server listening logic for local development
 // if (process.env.NODE_ENV !== "production") {
