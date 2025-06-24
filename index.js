@@ -1285,22 +1285,22 @@ app.get("/", (req, res) => {
 });
 
 // Serve static assets in production
-if (process.env.NODE_ENV === "production") {
-  // For Railway - we don't need to serve static client files
-  // This is an API-only server
-  console.log("✅ Production mode: API server running");
+// if (process.env.NODE_ENV === "production") {
+//   // For Railway - we don't need to serve static client files
+//   // This is an API-only server
+//   console.log("✅ Production mode: API server running");
   
-  // Add a simple root route for health check
-  app.get("/", (req, res) => {
-    res.json({
-      message: "MedEvent API Server",
-      status: "online",
-      timestamp: new Date().toISOString()
-    });
-  });
-} else {
-  console.log("Development mode");
-}
+//   // Add a simple root route for health check
+//   app.get("/", (req, res) => {
+//     res.json({
+//       message: "MedEvent API Server",
+//       status: "online",
+//       timestamp: new Date().toISOString()
+//     });
+//   });
+// } else {
+//   console.log("Development mode");
+// }
 
 // Remove or comment out the static file serving code that's causing issues:
 /*
