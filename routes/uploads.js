@@ -707,4 +707,82 @@ router.post("/chat-document", verifyToken, async (req, res) => {
   }
 });
 
+// Add this new route for temporary document uploads during signup
+router.post("/temp-document", async (req, res) => {
+  try {
+    console.log("Temp document upload request received");
+
+    // Make sure files were uploaded
+    if (!req.files || Object.keys(req.files).length === 0) {
+      return res.status(400).json({ message: "No files were uploaded" });
+    }
+
+    // Get the file with key 'document'
+    const file = req.files.document;
+    if (!file) {
+      return res.status(400).json({
+        message: "File must be provided with the key 'document'",
+      });
+    }
+
+    console.log("Temporary file received:", {
+      name: file.name,
+      size: file.size,
+      mimetype: file.mimetype,
+    });
+
+    // Generate a random ID for temporary storage
+    const tempId = `temp-${Date.now()}-${Math.random()
+      .toString(36)
+      .substring(2, 15)}`;
+    const fileName = `${tempId}-${file.name.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
+    const filePath = `temp-uploads/${fileName}`;
+
+    // Get file data
+    let fileData;
+    if (file.tempFilePath) {
+      fileData = fs.readFileSync(file.tempFilePath);
+    } else {
+      fileData = file.data;
+    }
+
+    // Upload to Supabase Storage
+    const { data, error } = await supabaseAdmin.storage
+      .from("medevents")
+      .upload(filePath, fileData, {
+        contentType: file.mimetype,
+        cacheControl: "3600",
+      });
+
+    if (error) {
+      console.error("Supabase storage error:", error);
+      return res.status(500).json({
+        message: "Failed to upload temporary document",
+        error: error.message,
+      });
+    }
+
+    // Get the public URL
+    const { data: publicUrlData } = supabaseAdmin.storage
+      .from("medevents")
+      .getPublicUrl(filePath);
+
+    // Clean up temp file if exists
+    if (file.tempFilePath && fs.existsSync(file.tempFilePath)) {
+      fs.unlinkSync(file.tempFilePath);
+    }
+
+    res.status(200).json({
+      url: publicUrlData.publicUrl,
+      storage_path: filePath,
+      name: file.name,
+      type: file.mimetype,
+      size: file.size,
+    });
+  } catch (error) {
+    console.error("Temp document upload error:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
 module.exports = router;

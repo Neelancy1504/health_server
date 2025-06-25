@@ -22,9 +22,9 @@ router.post("/signup", async (req, res) => {
       role,
       degree,
       company,
-      documents,
-      phone,
       roleInCompany,
+      phone,
+      documents,
     } = req.body;
 
     // Check if user exists
@@ -73,11 +73,7 @@ router.post("/signup", async (req, res) => {
     await sendVerificationEmail(newUser, verificationToken);
 
     // Handle document uploads if provided
-    if (
-      (role === "doctor" || role === "pharma") &&
-      documents &&
-      documents.length > 0
-    ) {
+    if (documents && documents.length > 0) {
       const documentsToInsert = documents.map((doc) => ({
         user_id: newUser.id,
         name: doc.name,
@@ -86,6 +82,7 @@ router.post("/signup", async (req, res) => {
         storage_path: doc.storage_path,
         url: doc.url,
         upload_date: new Date().toISOString(),
+        verified: false,
       }));
 
       const { error: docsError } = await supabase
@@ -94,6 +91,7 @@ router.post("/signup", async (req, res) => {
 
       if (docsError) {
         console.error("Error storing document references:", docsError);
+        // Don't fail the entire signup if document storage fails
       }
     }
 
