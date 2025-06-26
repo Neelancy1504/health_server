@@ -75,6 +75,7 @@ app.use("/api/users", userRoutes);
 app.use("/api/private-meetings", privateMeetingsRoutes);
 app.use("/api/uploads", uploadRoutes);
 app.use("/api/courses", coursesRoutes);
+app.use('/api/quiz', require('./routes/quiz'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 // Create an uploads directory
