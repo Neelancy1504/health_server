@@ -262,39 +262,76 @@ router.delete(
   async (req, res) => {
     try {
       const { id } = req.params;
+      console.log(`Attempting to delete course ${id} by user ${req.user.id}`);
 
       // Verify ownership if not admin
       if (req.user.role !== "admin") {
         const { data: course, error: courseError } = await supabase
           .from("courses")
-          .select("created_by")
+          .select("creator_id")
           .eq("id", id)
           .single();
 
         if (courseError || !course) {
+          console.log(`Course ${id} not found or error:`, courseError);
           return res.status(404).json({ message: "Course not found" });
         }
 
-        if (course.created_by !== req.user.id) {
+        if (course.creator_id !== req.user.id) {
+          console.log(`User ${req.user.id} not authorized to delete course ${id}`);
           return res.status(403).json({
             message: "You are not authorized to delete this course",
           });
         }
       }
 
-      // Delete course videos first
+      console.log(`Deleting course ${id} and related data...`);
+
+      // Delete course videos first (cascade should handle this, but let's be explicit)
       const { error: videoDeleteError } = await supabase
         .from("course_videos")
         .delete()
         .eq("course_id", id);
 
-      if (videoDeleteError) throw videoDeleteError;
+      if (videoDeleteError) {
+        console.error("Error deleting course videos:", videoDeleteError);
+        // Continue anyway - the course deletion might still work
+      }
 
-      // Then delete the course
-      const { error } = await supabase.from("courses").delete().eq("id", id);
+      // Delete course comments
+      const { error: commentsDeleteError } = await supabase
+        .from("course_comments")
+        .delete()
+        .eq("course_id", id);
 
-      if (error) throw error;
+      if (commentsDeleteError) {
+        console.error("Error deleting course comments:", commentsDeleteError);
+        // Continue anyway
+      }
 
+      // Delete course discussions
+      const { error: discussionsDeleteError } = await supabase
+        .from("course_discussions")
+        .delete()
+        .eq("course_id", id);
+
+      if (discussionsDeleteError) {
+        console.error("Error deleting course discussions:", discussionsDeleteError);
+        // Continue anyway
+      }
+
+      // Finally, delete the course
+      const { error } = await supabase
+        .from("courses")
+        .delete()
+        .eq("id", id);
+
+      if (error) {
+        console.error("Error deleting course:", error);
+        throw error;
+      }
+
+      console.log(`Course ${id} deleted successfully`);
       res.status(200).json({ message: "Course deleted successfully" });
     } catch (error) {
       console.error("Error deleting course:", error);

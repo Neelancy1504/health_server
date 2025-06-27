@@ -1317,12 +1317,26 @@ if (fs.existsSync(clientBuildPath)) {
 */
 
 // Set port
-const PORT = process.env.PORT || 8081;
+// Set port - use 5000 for local development, 8081 for production
+const PORT = process.env.PORT || 5000;
 
-// For Railway deployment
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ Server running on http://0.0.0.0:${PORT}`);
-});
+// Determine if running locally
+const isLocal = process.env.NODE_ENV !== "production" && !process.env.PORT;
+
+if (isLocal) {
+  // For local development - use the http server with socket.io
+  server.listen(PORT, () => {
+    console.log(`🚀 Local development server running on http://localhost:${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+    console.log(`Socket.io enabled for real-time features`);
+  });
+} else {
+  // For production (Railway/Render) - use express app
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`✅ Production server running on http://0.0.0.0:${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || "production"}`);
+  });
+}
 
 // Server listening logic for local development
 // if (process.env.NODE_ENV !== "production") {
