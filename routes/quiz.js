@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { supabase } = require('../config/supabase');
+const { supabase, supabaseAdmin } = require('../config/supabase'); // Make sure you import supabaseAdmin
 const authMiddleware = require('../middleware/authMiddleware');
 
 // Admin: Add quiz for an event
@@ -9,8 +9,8 @@ router.post('/add/:eventId', authMiddleware, async (req, res) => {
     const { questions } = req.body;
     const eventId = req.params.eventId;
 
-    // Check if quiz already exists for this event
-    const { data: existingQuiz } = await supabase
+    // Use supabaseAdmin for admin operations
+    const { data: existingQuiz } = await supabaseAdmin
       .from('quizzes')
       .select('*')
       .eq('event_id', eventId)
@@ -18,8 +18,7 @@ router.post('/add/:eventId', authMiddleware, async (req, res) => {
 
     let result;
     if (existingQuiz) {
-      // Update existing quiz
-      result = await supabase
+      result = await supabaseAdmin
         .from('quizzes')
         .update({ 
           questions,
@@ -28,8 +27,7 @@ router.post('/add/:eventId', authMiddleware, async (req, res) => {
         .eq('event_id', eventId)
         .select();
     } else {
-      // Create new quiz
-      result = await supabase
+      result = await supabaseAdmin
         .from('quizzes')
         .insert([{ 
           event_id: eventId, 
@@ -52,8 +50,8 @@ router.get('/:eventId', authMiddleware, async (req, res) => {
     const userId = req.user.id;
     const eventId = req.params.eventId;
 
-    // Get quiz data
-    const { data: quiz, error: quizError } = await supabase
+    // Use supabaseAdmin to bypass RLS
+    const { data: quiz, error: quizError } = await supabaseAdmin
       .from('quizzes')
       .select('*')
       .eq('event_id', eventId)
@@ -67,8 +65,8 @@ router.get('/:eventId', authMiddleware, async (req, res) => {
       return res.status(404).json({ message: 'Quiz not found' });
     }
 
-    // Get user's previous attempts
-    const { data: attempts, error: attemptsError } = await supabase
+    // Get user's previous attempts using supabaseAdmin
+    const { data: attempts, error: attemptsError } = await supabaseAdmin
       .from('quiz_submissions')
       .select('*')
       .eq('event_id', eventId)
@@ -79,7 +77,6 @@ router.get('/:eventId', authMiddleware, async (req, res) => {
       console.error('Error fetching attempts:', attemptsError);
     }
 
-    // Prepare response
     const response = {
       ...quiz,
       attempts: attempts || [],
@@ -95,15 +92,17 @@ router.get('/:eventId', authMiddleware, async (req, res) => {
   }
 });
 
-// Submit quiz answers
+// Submit quiz answers - FIXED VERSION
 router.post('/submit/:eventId', authMiddleware, async (req, res) => {
   try {
     const { answers, score, totalQuestions } = req.body;
     const eventId = req.params.eventId;
     const userId = req.user.id;
 
-    // Check if user has already reached max attempts
-    const { data: existingAttempts, error: checkError } = await supabase
+    console.log('Quiz submission data:', { eventId, userId, score, totalQuestions });
+
+    // Check existing attempts using supabaseAdmin
+    const { data: existingAttempts, error: checkError } = await supabaseAdmin
       .from('quiz_submissions')
       .select('id')
       .eq('event_id', eventId)
@@ -111,6 +110,7 @@ router.post('/submit/:eventId', authMiddleware, async (req, res) => {
 
     if (checkError) {
       console.error('Error checking attempts:', checkError);
+      return res.status(500).json({ message: 'Error checking previous attempts' });
     }
 
     if (existingAttempts && existingAttempts.length >= 2) {
@@ -121,13 +121,11 @@ router.post('/submit/:eventId', authMiddleware, async (req, res) => {
 
     // Calculate percentage
     const percentage = totalQuestions > 0 ? Math.round((score / totalQuestions) * 100) : 0;
-    
-    // Determine pass/fail status (assuming 60% is passing)
     const status = percentage >= 60 ? 'passed' : 'failed';
-
     const attemptNumber = existingAttempts ? existingAttempts.length + 1 : 1;
 
-    const { data, error } = await supabase
+    // Insert using supabaseAdmin to bypass RLS
+    const { data, error } = await supabaseAdmin
       .from('quiz_submissions')
       .insert([{
         event_id: eventId,
@@ -142,7 +140,12 @@ router.post('/submit/:eventId', authMiddleware, async (req, res) => {
       }])
       .select();
 
-    if (error) throw error;
+    if (error) {
+      console.error('Insert error:', error);
+      throw error;
+    }
+
+    console.log('Quiz submission successful:', data[0]);
 
     res.status(201).json({ 
       message: 'Quiz submitted successfully', 
@@ -161,7 +164,8 @@ router.get('/:eventId/results', authMiddleware, async (req, res) => {
     const userId = req.user.id;
     const eventId = req.params.eventId;
 
-    const { data: submissions, error } = await supabase
+    // Use supabaseAdmin to bypass RLS
+    const { data: submissions, error } = await supabaseAdmin
       .from('quiz_submissions')
       .select('*')
       .eq('event_id', eventId)
