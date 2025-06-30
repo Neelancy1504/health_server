@@ -9,7 +9,7 @@ const fileUpload = require("express-fileupload");
 const verifyToken = require("./middleware/authMiddleware");
 const { adminOnly } = require("./middleware/roleMiddleware");
 const notificationService = require("./services/notificationService");
-
+const courseRoutes = require('./routes/courses');
 // Update the ADMIN_SUPPORT_ID to use a real admin UUID
 // Use Sahil bhai's ID from your database
 const ADMIN_SUPPORT_ID = "66768b81-2d00-4eca-9145-4cf11f687fe8";
@@ -78,6 +78,7 @@ app.use("/api/courses", coursesRoutes);
 app.use('/api/quiz', require('./routes/quiz'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
 // Create an uploads directory
 if (process.env.NODE_ENV !== "production") {
   const uploadsDir = path.join(__dirname, "uploads");

@@ -1082,4 +1082,29 @@ router.get("/events/:id", verifyToken, adminOnly, async (req, res) => {
   }
 });
 
+// Get pending courses count
+router.get(
+  "/pending-courses-count",
+  verifyToken,
+  verifyRole(["admin"]),
+  async (req, res) => {
+    try {
+      const { count, error } = await supabase
+        .from("courses")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "pending");
+
+      if (error) {
+        console.error("Error counting pending courses:", error);
+        return res.status(500).json({ message: error.message });
+      }
+
+      res.json({ count });
+    } catch (error) {
+      console.error("Error fetching pending courses count:", error);
+      res.status(500).json({ message: error.message });
+    }
+  }
+);
+
 module.exports = router;

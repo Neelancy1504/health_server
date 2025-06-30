@@ -1,21 +1,41 @@
 const express = require("express");
 const router = express.Router();
 const verifyToken = require("../middleware/authMiddleware");
-const { verifyRole } = require("../middleware/roleMiddleware"); // Fixed import
+const { verifyRole } = require("../middleware/roleMiddleware");
 const { supabase } = require("../config/supabase");
+const jwt = require("jsonwebtoken");
 
 // Get all courses
 router.get("/", async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from("courses")
-      .select(
-        `
-        *,
-        videos:course_videos(*)
-      `
-      )
-      .order("created_at", { ascending: false });
+    let query = supabase.from("courses").select(`*, videos:course_videos(*)`);
+
+    // For non-admin users, only show approved courses
+    // For creators, show their own courses regardless of status
+    const authHeader = req.headers.authorization;
+    if (authHeader) {
+      try {
+        const token = authHeader.split(" ")[1];
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const userId = decoded.id;
+        const userRole = decoded.role;
+
+        if (userRole !== "admin") {
+          query = query.or(`status.eq.approved,creator_id.eq.${userId}`);
+        }
+      } catch (tokenError) {
+        // If token is invalid, just show approved courses
+        console.error("Token validation error:", tokenError);
+        query = query.eq("status", "approved");
+      }
+    } else {
+      // No auth header, show only approved courses
+      query = query.eq("status", "approved");
+    }
+
+    const { data, error } = await query.order("created_at", {
+      ascending: false,
+    });
 
     if (error) throw error;
 
@@ -26,7 +46,30 @@ router.get("/", async (req, res) => {
   }
 });
 
-// Get course by ID
+// Get pending courses (admin only) - MUST come before /:id route
+router.get("/pending", verifyToken, verifyRole(["admin"]), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("courses")
+      .select(
+        `
+        *,
+        videos:course_videos(*)
+      `
+      )
+      .eq("status", "pending")
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    res.json(data);
+  } catch (error) {
+    console.error("Error fetching pending courses:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Get course by ID - MUST come after specific routes like /pending
 router.get("/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -68,10 +111,10 @@ router.post(
         return res.status(400).json({ message: "Course title is required" });
       }
 
-      // Get user details to ensure we have a name
+      // Get user details
       const { data: userData, error: userError } = await supabase
         .from("users")
-        .select("name")
+        .select("name, role")
         .eq("id", req.user.id)
         .single();
 
@@ -83,7 +126,9 @@ router.post(
       }
 
       const creatorName = userData?.name || "Unknown User";
-      console.log("Creating course with creator name:", creatorName);
+
+      // Set initial status based on user role
+      const initialStatus = req.user.role === "admin" ? "approved" : "pending";
 
       const { data, error } = await supabase
         .from("courses")
@@ -92,16 +137,41 @@ router.post(
           description,
           category,
           creator_id: req.user.id,
-          creator_name: creatorName, // Use the retrieved name
+          creator_name: creatorName,
           tags: req.body.tags || [],
           thumbnail_url: req.body.thumbnail_url || null,
-          status: req.body.status || "published",
+          status: initialStatus, // 'pending' for doctors, 'approved' for admins
         })
         .select();
 
       if (error) throw error;
 
-      res.status(201).json(data[0]);
+      // If created by a doctor, notify admins about pending course
+      if (req.user.role === "doctor") {
+        try {
+          await notificationService.sendToRole(
+            "admin",
+            "New Course Needs Review",
+            `A new course "${title}" has been created by ${creatorName} and requires approval`,
+            {
+              type: "pending_course",
+              id: data[0].id,
+              action: "review_course",
+            }
+          );
+        } catch (notifError) {
+          console.error("Error sending admin notification:", notifError);
+          // Continue even if notification fails
+        }
+      }
+
+      res.status(201).json({
+        course: data[0],
+        message:
+          req.user.role === "admin"
+            ? "Course created and published successfully"
+            : "Course created successfully and pending admin approval",
+      });
     } catch (error) {
       console.error("Error creating course:", error);
       res.status(500).json({ message: error.message });
@@ -278,7 +348,9 @@ router.delete(
         }
 
         if (course.creator_id !== req.user.id) {
-          console.log(`User ${req.user.id} not authorized to delete course ${id}`);
+          console.log(
+            `User ${req.user.id} not authorized to delete course ${id}`
+          );
           return res.status(403).json({
             message: "You are not authorized to delete this course",
           });
@@ -316,15 +388,15 @@ router.delete(
         .eq("course_id", id);
 
       if (discussionsDeleteError) {
-        console.error("Error deleting course discussions:", discussionsDeleteError);
+        console.error(
+          "Error deleting course discussions:",
+          discussionsDeleteError
+        );
         // Continue anyway
       }
 
       // Finally, delete the course
-      const { error } = await supabase
-        .from("courses")
-        .delete()
-        .eq("id", id);
+      const { error } = await supabase.from("courses").delete().eq("id", id);
 
       if (error) {
         console.error("Error deleting course:", error);
@@ -392,7 +464,12 @@ router.get("/:courseId/discussions", async (req, res) => {
     const { courseId } = req.params;
     const { video_id } = req.query;
 
-    console.log('Getting discussions for course:', courseId, 'video:', video_id);
+    console.log(
+      "Getting discussions for course:",
+      courseId,
+      "video:",
+      video_id
+    );
 
     // Use a more explicit approach to avoid foreign key relationship issues
     const { data: discussions, error } = await supabase
@@ -402,32 +479,32 @@ router.get("/:courseId/discussions", async (req, res) => {
       .order("created_at", { ascending: false });
 
     if (error) {
-      console.error('Database error:', error);
+      console.error("Database error:", error);
       throw error;
     }
 
     // Filter by video_id if provided
     let filteredDiscussions = discussions;
-    if (video_id && video_id !== 'null' && video_id !== 'undefined') {
-      filteredDiscussions = discussions.filter(d => d.video_id === video_id);
+    if (video_id && video_id !== "null" && video_id !== "undefined") {
+      filteredDiscussions = discussions.filter((d) => d.video_id === video_id);
     }
 
     // Get user information separately to avoid foreign key issues
-    const userIds = [...new Set(filteredDiscussions.map(d => d.user_id))];
+    const userIds = [...new Set(filteredDiscussions.map((d) => d.user_id))];
     const { data: users, error: userError } = await supabase
       .from("users")
       .select("id, name, role, avatar_url")
       .in("id", userIds);
 
     if (userError) {
-      console.error('User fetch error:', userError);
+      console.error("User fetch error:", userError);
       // Continue without user data instead of failing
     }
 
     // Create a user lookup map
     const userMap = {};
     if (users) {
-      users.forEach(user => {
+      users.forEach((user) => {
         userMap[user.id] = user;
       });
     }
@@ -445,7 +522,7 @@ router.get("/:courseId/discussions", async (req, res) => {
       role: userMap[discussion.user_id]?.role || null,
     }));
 
-    console.log('Returning discussions:', formattedDiscussions.length);
+    console.log("Returning discussions:", formattedDiscussions.length);
     res.json(formattedDiscussions);
   } catch (error) {
     console.error("Error fetching course discussions:", error);
@@ -459,13 +536,13 @@ router.post("/:courseId/discussions", verifyToken, async (req, res) => {
     const { courseId } = req.params;
     const { content, parent_id, video_id } = req.body;
     const userId = req.user.id;
-    
-    console.log('Adding discussion:', {
+
+    console.log("Adding discussion:", {
       courseId,
       userId,
       content,
       parent_id,
-      video_id
+      video_id,
     });
 
     // Get user information
@@ -477,8 +554,8 @@ router.post("/:courseId/discussions", verifyToken, async (req, res) => {
 
     if (userError) {
       console.error("Error fetching user data:", userError);
-      return res.status(500).json({ 
-        message: "Failed to retrieve user information" 
+      return res.status(500).json({
+        message: "Failed to retrieve user information",
       });
     }
 
@@ -495,9 +572,9 @@ router.post("/:courseId/discussions", verifyToken, async (req, res) => {
       if (parentError || !parentComment) {
         return res.status(400).json({ message: "Parent comment not found" });
       }
-      
+
       parentAuthorId = parentComment.user_id;
-    } 
+    }
     // For top-level comments: Get course creator ID
     else {
       // Get course creator ID for notification
@@ -506,7 +583,7 @@ router.post("/:courseId/discussions", verifyToken, async (req, res) => {
         .select("creator_id, title")
         .eq("id", courseId)
         .single();
-        
+
       if (courseError) {
         console.error("Error fetching course data:", courseError);
       } else if (courseData) {
@@ -532,44 +609,48 @@ router.post("/:courseId/discussions", verifyToken, async (req, res) => {
       .single();
 
     if (error) {
-      console.error('Database insert error:', error);
+      console.error("Database insert error:", error);
       throw error;
     }
 
-    console.log('Successfully added discussion:', data);
+    console.log("Successfully added discussion:", data);
 
     // NOTIFICATION SYSTEM
     try {
-      const notificationService = require('../services/notificationService');
-      
+      const notificationService = require("../services/notificationService");
+
       // 1. If this is a reply, notify the original comment author
       if (parent_id && parentAuthorId && parentAuthorId !== userId) {
         await notificationService.sendToUser(
           parentAuthorId,
           "New Reply to Your Comment",
-          `${userData.name} replied to your comment in ${courseTitle || "a course"}`,
+          `${userData.name} replied to your comment in ${
+            courseTitle || "a course"
+          }`,
           {
             type: "course_comment_reply",
             id: courseId,
             comment_id: data.id,
             video_id: video_id || null,
-            action: "view_discussion"
+            action: "view_discussion",
           }
         );
         console.log(`Notification sent to comment author: ${parentAuthorId}`);
-      } 
+      }
       // 2. If this is a new comment, notify the course creator
       else if (!parent_id && courseCreatorId && courseCreatorId !== userId) {
         await notificationService.sendToUser(
           courseCreatorId,
           "New Comment on Your Course",
-          `${userData.name} commented on your course: ${courseTitle || "your course"}`,
+          `${userData.name} commented on your course: ${
+            courseTitle || "your course"
+          }`,
           {
             type: "course_new_comment",
             id: courseId,
             comment_id: data.id,
             video_id: video_id || null,
-            action: "view_discussion"
+            action: "view_discussion",
           }
         );
         console.log(`Notification sent to course creator: ${courseCreatorId}`);
@@ -653,14 +734,14 @@ router.get("/:courseId/comments", async (req, res) => {
     }
 
     // Format the response
-    const formattedComments = data.map(comment => ({
+    const formattedComments = data.map((comment) => ({
       ...comment,
       user_name: comment.user?.name || "Unknown User",
       user_avatar: comment.user?.avatar_url || null,
     }));
 
     // Remove the user object to avoid duplication
-    formattedComments.forEach(comment => {
+    formattedComments.forEach((comment) => {
       delete comment.user;
     });
 
@@ -690,14 +771,14 @@ router.get("/:courseId/videos/:videoId/comments", async (req, res) => {
     }
 
     // Format the response
-    const formattedComments = data.map(comment => ({
+    const formattedComments = data.map((comment) => ({
       ...comment,
       user_name: comment.user?.name || "Unknown User",
       user_avatar: comment.user?.avatar_url || null,
     }));
 
     // Remove the user object to avoid duplication
-    formattedComments.forEach(comment => {
+    formattedComments.forEach((comment) => {
       delete comment.user;
     });
 
@@ -760,72 +841,74 @@ router.post("/:courseId/comments", verifyToken, async (req, res) => {
 });
 
 // Add video comment
-router.post("/:courseId/videos/:videoId/comments", verifyToken, async (req, res) => {
-  try {
-    const { courseId, videoId } = req.params;
-    const { content } = req.body;
-    const userId = req.user.id;
+router.post(
+  "/:courseId/videos/:videoId/comments",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const { courseId, videoId } = req.params;
+      const { content } = req.body;
+      const userId = req.user.id;
 
-    if (!content || !content.trim()) {
-      return res.status(400).json({ message: "Comment content is required" });
+      if (!content || !content.trim()) {
+        return res.status(400).json({ message: "Comment content is required" });
+      }
+
+      // First insert the comment
+      const { data, error } = await supabase
+        .from("course_comments")
+        .insert({
+          course_id: courseId,
+          video_id: videoId,
+          user_id: userId,
+          content: content.trim(),
+        })
+        .select();
+
+      if (error) throw error;
+
+      if (!data || data.length === 0) {
+        throw new Error("Failed to insert comment");
+      }
+
+      // Then fetch user info to return complete comment data
+      const { data: userData, error: userError } = await supabase
+        .from("users")
+        .select("name, avatar_url")
+        .eq("id", userId)
+        .single();
+
+      if (userError) throw userError;
+
+      // Format the response
+      const comment = {
+        ...data[0],
+        user_name: userData?.name || "Unknown User",
+        user_avatar: userData?.avatar_url || null,
+      };
+
+      res.status(201).json(comment);
+    } catch (error) {
+      console.error("Error adding video comment:", error);
+      res.status(500).json({ message: error.message });
     }
-
-    // First insert the comment
-    const { data, error } = await supabase
-      .from("course_comments")
-      .insert({
-        course_id: courseId,
-        video_id: videoId,
-        user_id: userId,
-        content: content.trim(),
-      })
-      .select();
-
-    if (error) throw error;
-
-    if (!data || data.length === 0) {
-      throw new Error("Failed to insert comment");
-    }
-
-    // Then fetch user info to return complete comment data
-    const { data: userData, error: userError } = await supabase
-      .from("users")
-      .select("name, avatar_url")
-      .eq("id", userId)
-      .single();
-
-    if (userError) throw userError;
-
-    // Format the response
-    const comment = {
-      ...data[0],
-      user_name: userData?.name || "Unknown User",
-      user_avatar: userData?.avatar_url || null,
-    };
-
-    res.status(201).json(comment);
-  } catch (error) {
-    console.error("Error adding video comment:", error);
-    res.status(500).json({ message: error.message });
   }
-});
+);
 
 router.post("/:courseId/presence", async (req, res) => {
   try {
     const { courseId } = req.params;
     const { videoId, userId, isOnline } = req.body;
-    
+
     if (isOnline) {
       // Upsert user presence
-      const { error } = await supabase
-        .from("user_presence")
-        .upsert({
-          user_id: userId,
-          course_id: courseId,
-          video_id: videoId || null,
-          last_seen: new Date().toISOString(),
-          is_online: true
-        });
+      const { error } = await supabase.from("user_presence").upsert({
+        user_id: userId,
+        course_id: courseId,
+        video_id: videoId || null,
+        last_seen: new Date().toISOString(),
+        is_online: true,
+      });
       if (error) {
         console.error("Error upserting presence:", error);
         return res.status(500).json({ message: "Failed to update presence" });
@@ -853,5 +936,75 @@ router.post("/:courseId/presence", async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 });
+
+// Approve course (admin only)
+router.put(
+  "/:id/approve",
+  verifyToken,
+  verifyRole(["admin"]),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { notes } = req.body;
+
+      // Update course status
+      const { data, error } = await supabase
+        .from("courses")
+        .update({
+          status: "approved",
+          approval_notes: notes || "Course approved by admin",
+          approved_at: new Date().toISOString(),
+          approved_by: req.user.id,
+        })
+        .eq("id", id)
+        .select();
+
+      if (error) throw error;
+
+      res.json({ message: "Course approved successfully", course: data[0] });
+    } catch (error) {
+      console.error("Error approving course:", error);
+      res.status(500).json({ message: error.message });
+    }
+  }
+);
+
+// Reject course (admin only)
+router.put(
+  "/:id/reject",
+  verifyToken,
+  verifyRole(["admin"]),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { notes } = req.body;
+
+      if (!notes) {
+        return res
+          .status(400)
+          .json({ message: "Rejection notes are required" });
+      }
+
+      // Update course status
+      const { data, error } = await supabase
+        .from("courses")
+        .update({
+          status: "rejected",
+          approval_notes: notes,
+          rejected_at: new Date().toISOString(),
+          rejected_by: req.user.id,
+        })
+        .eq("id", id)
+        .select();
+
+      if (error) throw error;
+
+      res.json({ message: "Course rejected successfully", course: data[0] });
+    } catch (error) {
+      console.error("Error rejecting course:", error);
+      res.status(500).json({ message: error.message });
+    }
+  }
+);
 
 module.exports = router;
