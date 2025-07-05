@@ -4,15 +4,15 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { supabase } = require("../config/supabase");
 const verifyToken = require("../middleware/authMiddleware");
-const { verifyRole } = require("../middleware/roleMiddleware"); // Fixed import
-const { sendVerificationEmail } = require("../config/email");
+const { verifyRole } = require("../middleware/roleMiddleware");
+const { sendOTPEmail } = require("../config/email"); // Updated import
 const {
-  generateVerificationToken,
-  storeVerificationToken,
-  verifyToken: verifyEmailToken,
-} = require("../utils/tokenUtils");
+  generateOTP,
+  storeOTP,
+  verifyOTP,
+} = require("../utils/otpUtils"); // New utility
 
-// Signup Route
+// Signup Route - Modified for OTP
 router.post("/signup", async (req, res) => {
   try {
     const {
@@ -27,10 +27,17 @@ router.post("/signup", async (req, res) => {
       documents,
     } = req.body;
 
+    console.log('🔍 Backend signup called with:', {
+      name,
+      email,
+      role,
+      documentsCount: documents?.length || 0
+    });
+
     // Check if user exists
     const { data: existingUser, error: fetchError } = await supabase
       .from("users")
-      .select("id")
+      .select("id, email_verified")
       .eq("email", email)
       .single();
 
@@ -38,44 +45,68 @@ router.post("/signup", async (req, res) => {
       throw new Error(fetchError.message);
     }
 
-    if (existingUser) {
-      return res.status(400).json({ message: "User already exists" });
+    if (existingUser && existingUser.email_verified) {
+      return res.status(400).json({ message: "User already exists and is verified" });
     }
 
     // Hash password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Create user with email_verified set to false
-    const { data: newUser, error: insertError } = await supabase
-      .from("users")
-      .insert({
-        name,
-        email,
-        password: hashedPassword,
-        role,
-        degree: role === "doctor" ? degree : null,
-        company: role === "pharma" ? company : null,
-        phone: phone || null,
-        role_in_company: role === "pharma" ? roleInCompany : null,
-        email_verified: false, // Initially set to false
-      })
-      .select()
-      .single();
+    let userId;
 
-    if (insertError) throw new Error(insertError.message);
+    if (existingUser && !existingUser.email_verified) {
+      // Update existing unverified user
+      const { data: updatedUser, error: updateError } = await supabase
+        .from("users")
+        .update({
+          name,
+          password: hashedPassword,
+          role,
+          degree: role === "doctor" ? degree : null,
+          company: role === "pharma" ? company : null,
+          phone: phone || null,
+          role_in_company: role === "pharma" ? roleInCompany : null,
+        })
+        .eq("id", existingUser.id)
+        .select()
+        .single();
 
-    // Generate and store verification token
-    const verificationToken = generateVerificationToken();
-    await storeVerificationToken(newUser.id, verificationToken);
+      if (updateError) throw new Error(updateError.message);
+      userId = updatedUser.id;
+    } else {
+      // Create new user with email_verified set to false
+      const { data: newUser, error: insertError } = await supabase
+        .from("users")
+        .insert({
+          name,
+          email,
+          password: hashedPassword,
+          role,
+          degree: role === "doctor" ? degree : null,
+          company: role === "pharma" ? company : null,
+          phone: phone || null,
+          role_in_company: role === "pharma" ? roleInCompany : null,
+          email_verified: false,
+        })
+        .select()
+        .single();
 
-    // Send verification email
-    await sendVerificationEmail(newUser, verificationToken);
+      if (insertError) throw new Error(insertError.message);
+      userId = newUser.id;
+    }
+
+    console.log('✅ User created with ID:', userId);
 
     // Handle document uploads if provided
     if (documents && documents.length > 0) {
+      console.log('📄 Processing documents:', documents.length);
+      
+      // Delete existing documents for this user if updating
+      await supabase.from("documents").delete().eq("user_id", userId);
+
       const documentsToInsert = documents.map((doc) => ({
-        user_id: newUser.id,
+        user_id: userId,
         name: doc.name,
         type: doc.type,
         size: doc.size,
@@ -91,47 +122,91 @@ router.post("/signup", async (req, res) => {
 
       if (docsError) {
         console.error("Error storing document references:", docsError);
-        // Don't fail the entire signup if document storage fails
+      } else {
+        console.log('✅ Documents stored successfully');
       }
     }
 
-    res.status(201).json({
-      message:
-        "User registered successfully. Please check your email to verify your account.",
-    });
+    // Generate and store OTP
+    console.log('📧 Generating OTP for email:', email);
+    const otp = generateOTP();
+    await storeOTP(email, otp);
+
+    // Send OTP email
+    await sendOTPEmail({ name, email }, otp);
+    console.log('✅ OTP email sent successfully');
+
+    // THIS IS THE CRUCIAL PART - MAKE SURE THIS RESPONSE IS SENT
+    const responseData = {
+      message: "User registered successfully. Please verify your email with the OTP sent to your email address.",
+      email: email,
+      needsOTPVerification: true, // This is crucial!
+    };
+
+    console.log('🚀 Sending response:', responseData);
+    res.status(201).json(responseData);
+    
   } catch (error) {
-    console.error("Signup error:", error);
+    console.error("❌ Signup error:", error);
     res.status(500).json({ message: error.message });
   }
 });
 
-// Add a new route for verifying email
-router.get("/verify-email", async (req, res) => {
+// New route for OTP verification
+router.post("/verify-otp", async (req, res) => {
   try {
-    const { token } = req.query;
+    const { email, otp } = req.body;
 
-    if (!token) {
-      return res
-        .status(400)
-        .json({ message: "No verification token provided" });
+    if (!email || !otp) {
+      return res.status(400).json({ message: "Email and OTP are required" });
     }
 
-    await verifyEmailToken(token);
+    // Verify OTP
+    const isValidOTP = await verifyOTP(email, otp);
+    
+    if (!isValidOTP) {
+      return res.status(400).json({ message: "Invalid or expired OTP" });
+    }
 
-    // Redirect to the verification success page
-    //res.redirect(`${process.env.FRONTEND_URL}/verification-success`);
-    res.json({ success: true, message: "Email verified successfully" });
-  } catch (error) {
-    onsole.error("Email verification error:", error);
-    return res.status(400).json({
-      success: false,
-      message: error.message || "Verification failed",
+    // Update user as verified
+    const { data: user, error: updateError } = await supabase
+      .from("users")
+      .update({ 
+        email_verified: true, 
+        email_verified_at: new Date().toISOString() 
+      })
+      .eq("email", email)
+      .select()
+      .single();
+
+    if (updateError) {
+      throw new Error(updateError.message);
+    }
+
+    // Create JWT token
+    const token = jwt.sign(
+      { id: user.id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    // Remove password from response
+    delete user.password;
+
+    res.json({ 
+      success: true,
+      message: "Email verified successfully",
+      token,
+      user
     });
+  } catch (error) {
+    console.error("OTP verification error:", error);
+    res.status(500).json({ message: error.message });
   }
 });
 
-// Add a route for resending verification emails
-router.post("/resend-verification", async (req, res) => {
+// Resend OTP route
+router.post("/resend-otp", async (req, res) => {
   try {
     const { email } = req.body;
 
@@ -155,16 +230,16 @@ router.post("/resend-verification", async (req, res) => {
       return res.status(400).json({ message: "Email is already verified" });
     }
 
-    // Generate new token
-    const verificationToken = generateVerificationToken();
-    await storeVerificationToken(user.id, verificationToken);
+    // Generate and store new OTP
+    const otp = generateOTP();
+    await storeOTP(email, otp);
 
-    // Send verification email
-    await sendVerificationEmail(user, verificationToken);
+    // Send OTP email
+    await sendOTPEmail(user, otp);
 
-    res.json({ message: "Verification email sent successfully" });
+    res.json({ message: "OTP sent successfully" });
   } catch (error) {
-    console.error("Resend verification error:", error);
+    console.error("Resend OTP error:", error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -194,9 +269,8 @@ router.post("/login", async (req, res) => {
     // Check if email is verified
     if (!user.email_verified && user.role !== "admin") {
       return res.status(403).json({
-        message:
-          "Email not verified. Please verify your email before logging in.",
-        needsVerification: true,
+        message: "Email not verified. Please verify your email with OTP.",
+        needsOTPVerification: true,
         email: user.email,
       });
     }

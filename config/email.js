@@ -2,19 +2,54 @@ const nodemailer = require("nodemailer");
 
 // Create reusable transporter using your configuration
 const transporter = nodemailer.createTransport({
-  service: "gmail", // You're using Gmail based on your .env
+  service: "gmail",
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASSWORD,
   },
 });
 
-// Email verification functions
+// Send OTP email
+const sendOTPEmail = async (user, otp) => {
+  const mailOptions = {
+    from: `"MedEvent" <${process.env.EMAIL_USER}>`,
+    to: user.email,
+    subject: "Verify Your MedEvent Account - OTP",
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #333;">
+        <div style="text-align: center; margin-bottom: 20px;">
+          <h1 style="color: #2e7af5;">MedEvent</h1>
+        </div>
+        
+        <div style="background-color: #f7f9fc; padding: 20px; border-radius: 10px;">
+          <h2>Email Verification</h2>
+          <p>Hi ${user.name},</p>
+          <p>Thank you for signing up with MedEvent. To complete your registration, please use the following OTP to verify your email address:</p>
+          
+          <div style="text-align: center; margin: 30px 0;">
+            <div style="background-color: #2e7af5; color: white; padding: 20px; font-size: 32px; font-weight: bold; letter-spacing: 8px; border-radius: 8px; display: inline-block;">${otp}</div>
+          </div>
+          
+          <p style="text-align: center; color: #666; font-size: 14px;">This OTP will expire in 10 minutes</p>
+          
+          <p>If you did not sign up for MedEvent, please ignore this email.</p>
+        </div>
+        
+        <div style="text-align: center; margin-top: 20px; color: #666; font-size: 14px;">
+          <p>&copy; ${new Date().getFullYear()} MedEvent. All rights reserved.</p>
+        </div>
+      </div>
+    `,
+  };
+
+  const info = await transporter.sendMail(mailOptions);
+  return info;
+};
+
+// Keep existing email verification function for backward compatibility
 const sendVerificationEmail = async (user, verificationToken) => {
-  // Generate the verification URL with the token - Using your deployed verification page
-  //const verificationUrl = `https://health-verification.vercel.app/verify-email?token=${verificationToken}`;
   const verificationUrl = `https://health-verification.vercel.app?token=${verificationToken}`;
-  // Email content
+  
   const mailOptions = {
     from: `"MedEvent" <${process.env.EMAIL_USER}>`,
     to: user.email,
@@ -47,12 +82,12 @@ const sendVerificationEmail = async (user, verificationToken) => {
     `,
   };
 
-  // Send the email
   const info = await transporter.sendMail(mailOptions);
   return info;
 };
 
 module.exports = {
   transporter,
+  sendOTPEmail,
   sendVerificationEmail,
 };
