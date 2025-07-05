@@ -1,231 +1,465 @@
 const express = require("express");
 const router = express.Router();
 const verifyToken = require("../middleware/authMiddleware");
-const { verifyRole } = require("../middleware/roleMiddleware"); // Fixed import
-const multer = require("multer");
+const { verifyRole } = require("../middleware/roleMiddleware");
 const path = require("path");
 const fs = require("fs");
 const { v4: uuidv4 } = require("uuid");
-const { supabase, supabaseAdmin } = require("../config/supabase"); // Add this line
+const { supabase, supabaseAdmin } = require("../config/supabase");
 
-// Configure storage for temporary file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    if (process.env.NODE_ENV === "production") {
-      // In production (Vercel), use memory storage
-      cb(null, "/tmp"); // Vercel allows writing to /tmp
-    } else {
-      // In development, use disk storage
-      const uploadDir = path.join(__dirname, "../uploads");
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
-      }
-      cb(null, uploadDir);
+// FIXED: Document upload endpoint with better error handling
+router.post("/document", verifyToken, async (req, res) => {
+  try {
+    console.log("Document upload request received", {
+      hasFiles: !!req.files,
+      contentType: req.headers["content-type"],
+      fileCount: req.files ? Object.keys(req.files).length : 0,
+    });
+
+    // Make sure files were uploaded
+    if (!req.files || Object.keys(req.files).length === 0) {
+      console.log("❌ No files in request");
+      return res.status(400).json({ 
+        success: false, 
+        message: "No files were uploaded" 
+      });
     }
-  },
-  filename: (req, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname.replace(/\s/g, "_")}`);
-  },
+
+    // Get the file with key 'document'
+    const file = req.files.document;
+    if (!file) {
+      console.log("❌ No 'document' key found in files");
+      console.log("Available keys:", Object.keys(req.files));
+      return res.status(400).json({
+        success: false,
+        message: "File must be provided with the key 'document'",
+      });
+    }
+
+    // Log detailed file information for debugging
+    console.log("✅ Document file received:", {
+      name: file.name,
+      size: file.size,
+      mimetype: file.mimetype,
+      tempFilePath: file.tempFilePath || "N/A",
+      md5: file.md5,
+      truncated: file.truncated || false, // Check if file was truncated
+    });
+
+    // Check if file was truncated (incomplete upload)
+    if (file.truncated) {
+      console.log("❌ File was truncated during upload");
+      return res.status(400).json({
+        success: false,
+        message: "File upload was incomplete. Please try again.",
+      });
+    }
+
+    // Validate file size (50MB limit)
+    if (file.size > 50 * 1024 * 1024) {
+      return res.status(400).json({
+        success: false,
+        message: "File size exceeds 50MB limit",
+      });
+    }
+
+    // Validate minimum file size (avoid empty files)
+    if (file.size < 100) {
+      return res.status(400).json({
+        success: false,
+        message: "File is too small or corrupted",
+      });
+    }
+
+    // Use userId from authenticated user
+    const userId = req.user.id;
+
+    const fileExtension = path.extname(file.name) || `.${file.mimetype.split("/")[1]}`;
+    const fileName = `${Date.now()}-${Math.random()
+      .toString(36)
+      .substring(2, 15)}${fileExtension}`;
+    const filePath = `documents/${userId}/${fileName}`;
+
+    // Get file data with improved error handling
+    let fileData;
+    try {
+      if (file.tempFilePath && fs.existsSync(file.tempFilePath)) {
+        console.log("📁 Reading from temp file:", file.tempFilePath);
+        fileData = fs.readFileSync(file.tempFilePath);
+        console.log("✅ Read", fileData.length, "bytes from temp file");
+      } else if (file.data) {
+        console.log("📦 Using data buffer, size:", file.data.length);
+        fileData = file.data;
+      } else {
+        console.log("❌ No file data available");
+        return res.status(400).json({ 
+          success: false, 
+          message: "File data not found" 
+        });
+      }
+    } catch (readError) {
+      console.error("❌ Error reading file data:", readError);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to read uploaded file",
+        error: readError.message,
+      });
+    }
+
+    // Check file data is present and matches expected size
+    if (!fileData || fileData.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "File data is empty" 
+      });
+    }
+
+    // Verify file size matches
+    if (fileData.length !== file.size) {
+      console.log(`⚠️ Size mismatch: expected ${file.size}, got ${fileData.length}`);
+      // Don't fail for small differences, but log it
+    }
+
+    console.log("🚀 Uploading to Supabase storage...");
+
+    // Upload to Supabase with retry logic
+    let uploadError;
+    let uploadData;
+    const maxRetries = 3;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`📤 Upload attempt ${attempt}/${maxRetries}`);
+        
+        const result = await supabaseAdmin.storage
+          .from("medevents")
+          .upload(filePath, fileData, {
+            contentType: file.mimetype || "application/octet-stream",
+            cacheControl: "3600",
+            upsert: true,
+          });
+
+        if (result.error) {
+          uploadError = result.error;
+          console.log(`❌ Attempt ${attempt} failed:`, uploadError.message);
+          
+          // If it's the last attempt, break
+          if (attempt === maxRetries) break;
+          
+          // Wait before retry
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+          continue;
+        }
+
+        uploadData = result.data;
+        uploadError = null;
+        console.log("✅ Upload successful on attempt", attempt);
+        break;
+
+      } catch (error) {
+        uploadError = error;
+        console.log(`❌ Attempt ${attempt} exception:`, error.message);
+        
+        if (attempt === maxRetries) break;
+        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+      }
+    }
+
+    if (uploadError) {
+      console.error("❌ All upload attempts failed:", uploadError);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to upload to storage after multiple attempts",
+        error: uploadError.message,
+      });
+    }
+
+    // Get public URL
+    const { data: publicUrlData } = supabaseAdmin.storage
+      .from("medevents")
+      .getPublicUrl(filePath);
+
+    console.log("✅ File uploaded successfully:", {
+      originalName: file.name,
+      storagePath: filePath,
+      publicUrl: publicUrlData.publicUrl,
+      fileSize: fileData.length,
+    });
+
+    // Clean up temp file if it exists
+    if (file.tempFilePath && fs.existsSync(file.tempFilePath)) {
+      try {
+        fs.unlinkSync(file.tempFilePath);
+        console.log("🧹 Temp file cleaned up");
+      } catch (cleanupError) {
+        console.error("⚠️ Error cleaning up temp file:", cleanupError);
+        // Don't fail the request for cleanup errors
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Document uploaded successfully",
+      url: publicUrlData.publicUrl,
+      fileName: file.name,
+      fileType: file.mimetype,
+      size: file.size,
+      storage_path: filePath,
+    });
+
+  } catch (error) {
+    console.error("❌ Document upload error:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Server error during upload", 
+      error: error.message 
+    });
+  }
 });
 
-const upload = multer({ storage });
+// FIXED: Temp document upload endpoint (for signup process)
+router.post("/temp-document", async (req, res) => {
+  try {
+    console.log("Temp document upload request received", {
+      hasFiles: !!req.files,
+      contentType: req.headers["content-type"],
+    });
 
-// Upload document to Supabase Storage
-router.post(
-  "/document",
-  verifyToken,
-  upload.single("document"),
-  async (req, res) => {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ message: "No file uploaded" });
-      }
-
-      console.log("File received:", req.file);
-
-      // Generate a unique filename for storage
-      const fileExtension = path.extname(req.file.originalname);
-      const fileName = `${uuidv4()}${fileExtension}`;
-      const filePath = `documents/${req.user.id}/${fileName}`;
-
-      // Upload to Supabase Storage
-      const fileBuffer = fs.readFileSync(req.file.path);
-
-      // Check that supabaseAdmin is properly initialized
-      if (!supabaseAdmin || !supabaseAdmin.storage) {
-        console.error("Supabase Admin client not properly initialized");
-        return res.status(500).json({
-          message: "Storage service unavailable",
-          details: "Supabase storage client not initialized",
-        });
-      }
-
-      // Upload file to Supabase
-      const { data, error } = await supabaseAdmin.storage
-        .from("medevents")
-        .upload(filePath, fileBuffer, {
-          contentType: req.file.mimetype,
-          cacheControl: "3600",
-          upsert: true,
-        });
-
-      if (error) {
-        console.error("Supabase storage error:", error);
-        return res.status(500).json({
-          message: "Failed to upload to storage",
-          error: error.message,
-        });
-      }
-
-      // Get the public URL
-      const { data: publicUrlData } = supabaseAdmin.storage
-        .from("medevents")
-        .getPublicUrl(filePath);
-
-      const url = publicUrlData.publicUrl;
-
-      // Remove the temp file
-      fs.unlinkSync(req.file.path);
-
-      res.status(200).json({
-        url,
-        storage_path: filePath,
-        name: req.file.originalname,
-        type: req.file.mimetype,
-        size: req.file.size,
+    // Make sure files were uploaded
+    if (!req.files || Object.keys(req.files).length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "No files were uploaded" 
       });
-    } catch (error) {
-      console.error("Upload error:", error);
-      res.status(500).json({ message: error.message });
     }
-  }
-);
 
-// Upload event brochure to Supabase Storage and link to event
-router.post(
-  "/brochure",
-  verifyToken,
-  upload.single("document"),
-  async (req, res) => {
-    try {
-      // Verify the user is an admin
-      if (req.user.role !== "admin") {
-        return res.status(403).json({
-          message: "Unauthorized. Only admins can upload event brochures.",
-        });
-      }
-
-      // Check if the event_id was provided in the request body
-      if (!req.body.event_id) {
-        return res.status(400).json({
-          message: "event_id is required for brochure upload",
-        });
-      }
-
-      if (!req.file) {
-        return res.status(400).json({ message: "No brochure uploaded" });
-      }
-
-      console.log("Brochure received:", req.file);
-
-      // Check if it's a PDF
-      if (req.file.mimetype !== "application/pdf") {
-        // Clean up the temp file
-        fs.unlinkSync(req.file.path);
-        return res.status(400).json({
-          message:
-            "Invalid file format. Only PDF files are accepted for brochures.",
-        });
-      }
-
-      // Verify the event exists
-      const { data: eventData, error: eventError } = await supabase
-        .from("events")
-        .select("id")
-        .eq("id", req.body.event_id)
-        .single();
-
-      if (eventError || !eventData) {
-        fs.unlinkSync(req.file.path);
-        return res.status(404).json({
-          message: "Event not found",
-        });
-      }
-
-      // Generate a unique filename for storage
-      const fileName = `brochure-${uuidv4()}.pdf`;
-      const filePath = `brochures/${fileName}`;
-
-      // Upload to Supabase Storage
-      const fileBuffer = fs.readFileSync(req.file.path);
-
-      // Check that supabaseAdmin is properly initialized
-      if (!supabaseAdmin || !supabaseAdmin.storage) {
-        console.error("Supabase Admin client not properly initialized");
-        return res.status(500).json({
-          message: "Storage service unavailable",
-          details: "Supabase storage client not initialized",
-        });
-      }
-
-      // Upload file to Supabase
-      const { data, error } = await supabaseAdmin.storage
-        .from("medevents")
-        .upload(filePath, fileBuffer, {
-          contentType: "application/pdf",
-          cacheControl: "3600",
-          upsert: true,
-        });
-
-      if (error) {
-        console.error("Supabase storage error:", error);
-        return res.status(500).json({
-          message: "Failed to upload brochure to storage",
-          error: error.message,
-        });
-      }
-
-      // Get the public URL
-      const { data: publicUrlData } = supabaseAdmin.storage
-        .from("medevents")
-        .getPublicUrl(filePath);
-
-      const url = publicUrlData.publicUrl;
-
-      // Save brochure details to the brochures table
-      const { data: brochureData, error: brochureError } = await supabase
-        .from("brochures")
-        .insert({
-          name: req.file.originalname,
-          url: url,
-          storage_path: filePath,
-          type: req.file.mimetype,
-          size: req.file.size,
-          event_id: req.body.event_id,
-          upload_date: new Date().toISOString(),
-          is_public: true,
-        })
-        .select()
-        .single();
-
-      if (brochureError) {
-        console.error("Error saving brochure to database:", brochureError);
-        return res.status(500).json({
-          message: "Failed to link brochure to event",
-          error: brochureError.message,
-        });
-      }
-
-      // Remove the temp file
-      fs.unlinkSync(req.file.path);
-
-      res.status(200).json(brochureData);
-    } catch (error) {
-      console.error("Brochure upload error:", error);
-      res.status(500).json({ message: error.message });
+    // Get the file with key 'document'
+    const file = req.files.document;
+    if (!file) {
+      return res.status(400).json({
+        success: false,
+        message: "File must be provided with the key 'document'",
+      });
     }
+
+    // Log file info
+    console.log("Temp document file received:", {
+      name: file.name,
+      size: file.size,
+      mimetype: file.mimetype,
+    });
+
+    // Validate file size
+    if (file.size > 50 * 1024 * 1024) {
+      return res.status(400).json({
+        success: false,
+        message: "File size exceeds 50MB limit",
+      });
+    }
+
+    const fileExtension = path.extname(file.name) || `.${file.mimetype.split("/")[1]}`;
+    const fileName = `temp-${Date.now()}-${Math.random()
+      .toString(36)
+      .substring(2, 15)}${fileExtension}`;
+    const filePath = `temp-documents/${fileName}`;
+
+    // Get file data
+    let fileData;
+    if (file.tempFilePath && fs.existsSync(file.tempFilePath)) {
+      fileData = fs.readFileSync(file.tempFilePath);
+    } else if (file.data) {
+      fileData = file.data;
+    } else {
+      return res.status(400).json({ 
+        success: false, 
+        message: "File data not found" 
+      });
+    }
+
+    // Upload to Supabase
+    const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
+      .from("medevents")
+      .upload(filePath, fileData, {
+        contentType: file.mimetype || "application/octet-stream",
+        cacheControl: "3600",
+        upsert: true,
+      });
+
+    if (uploadError) {
+      console.error("Supabase storage error:", uploadError);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to upload to storage",
+        error: uploadError.message,
+      });
+    }
+
+    // Get public URL
+    const { data: publicUrlData } = supabaseAdmin.storage
+      .from("medevents")
+      .getPublicUrl(filePath);
+
+    // Clean up temp file
+    if (file.tempFilePath && fs.existsSync(file.tempFilePath)) {
+      try {
+        fs.unlinkSync(file.tempFilePath);
+      } catch (cleanupError) {
+        console.error("Error cleaning up temp file:", cleanupError);
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Temp document uploaded successfully",
+      url: publicUrlData.publicUrl,
+      fileName: file.name,
+      fileType: file.mimetype,
+      size: file.size,
+      storage_path: filePath,
+    });
+
+  } catch (error) {
+    console.error("Temp document upload error:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Server error during upload", 
+      error: error.message 
+    });
   }
-);
+});
+
+// FIXED: Upload event brochure - Remove multer middleware
+router.post("/brochure", verifyToken, async (req, res) => {
+  try {
+    // Verify the user is an admin
+    if (req.user.role !== "admin") {
+      return res.status(403).json({
+        message: "Unauthorized. Only admins can upload event brochures.",
+      });
+    }
+
+    // Check if the event_id was provided in the request body
+    if (!req.body.event_id) {
+      return res.status(400).json({
+        message: "event_id is required for brochure upload",
+      });
+    }
+
+    // Check if file was uploaded using express-fileupload
+    if (!req.files || !req.files.document) {
+      return res.status(400).json({ message: "No brochure uploaded" });
+    }
+
+    const file = req.files.document;
+
+    console.log("Brochure received:", {
+      name: file.name,
+      size: file.size,
+      mimetype: file.mimetype,
+    });
+
+    // Check if it's a PDF
+    if (file.mimetype !== "application/pdf") {
+      return res.status(400).json({
+        message: "Invalid file format. Only PDF files are accepted for brochures.",
+      });
+    }
+
+    // Verify the event exists
+    const { data: eventData, error: eventError } = await supabase
+      .from("events")
+      .select("id")
+      .eq("id", req.body.event_id)
+      .single();
+
+    if (eventError || !eventData) {
+      return res.status(404).json({
+        message: "Event not found",
+      });
+    }
+
+    // Generate a unique filename for storage
+    const fileName = `brochure-${uuidv4()}.pdf`;
+    const filePath = `brochures/${fileName}`;
+
+    // Get file data
+    let fileData;
+    if (file.tempFilePath && fs.existsSync(file.tempFilePath)) {
+      fileData = fs.readFileSync(file.tempFilePath);
+    } else if (file.data) {
+      fileData = file.data;
+    } else {
+      return res.status(400).json({ message: "File data not found" });
+    }
+
+    // Check that supabaseAdmin is properly initialized
+    if (!supabaseAdmin || !supabaseAdmin.storage) {
+      console.error("Supabase Admin client not properly initialized");
+      return res.status(500).json({
+        message: "Storage service unavailable",
+        details: "Supabase storage client not initialized",
+      });
+    }
+
+    // Upload file to Supabase
+    const { data, error } = await supabaseAdmin.storage
+      .from("medevents")
+      .upload(filePath, fileData, {
+        contentType: "application/pdf",
+        cacheControl: "3600",
+        upsert: true,
+      });
+
+    if (error) {
+      console.error("Supabase storage error:", error);
+      return res.status(500).json({
+        message: "Failed to upload brochure to storage",
+        error: error.message,
+      });
+    }
+
+    // Get the public URL
+    const { data: publicUrlData } = supabaseAdmin.storage
+      .from("medevents")
+      .getPublicUrl(filePath);
+
+    const url = publicUrlData.publicUrl;
+
+    // Save brochure details to the brochures table
+    const { data: brochureData, error: brochureError } = await supabase
+      .from("brochures")
+      .insert({
+        name: file.name,
+        url: url,
+        storage_path: filePath,
+        type: file.mimetype,
+        size: file.size,
+        event_id: req.body.event_id,
+        upload_date: new Date().toISOString(),
+        is_public: true,
+      })
+      .select()
+      .single();
+
+    if (brochureError) {
+      console.error("Error saving brochure to database:", brochureError);
+      return res.status(500).json({
+        message: "Failed to link brochure to event",
+        error: brochureError.message,
+      });
+    }
+
+    // Clean up temp file
+    if (file.tempFilePath && fs.existsSync(file.tempFilePath)) {
+      fs.unlinkSync(file.tempFilePath);
+    }
+
+    res.status(200).json(brochureData);
+  } catch (error) {
+    console.error("Brochure upload error:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
 
 // Add this new route to get PDF page
 router.get(
@@ -703,84 +937,6 @@ router.post("/chat-document", verifyToken, async (req, res) => {
     });
   } catch (error) {
     console.error("Chat file upload error:", error);
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Add this new route for temporary document uploads during signup
-router.post("/temp-document", async (req, res) => {
-  try {
-    console.log("Temp document upload request received");
-
-    // Make sure files were uploaded
-    if (!req.files || Object.keys(req.files).length === 0) {
-      return res.status(400).json({ message: "No files were uploaded" });
-    }
-
-    // Get the file with key 'document'
-    const file = req.files.document;
-    if (!file) {
-      return res.status(400).json({
-        message: "File must be provided with the key 'document'",
-      });
-    }
-
-    console.log("Temporary file received:", {
-      name: file.name,
-      size: file.size,
-      mimetype: file.mimetype,
-    });
-
-    // Generate a random ID for temporary storage
-    const tempId = `temp-${Date.now()}-${Math.random()
-      .toString(36)
-      .substring(2, 15)}`;
-    const fileName = `${tempId}-${file.name.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
-    const filePath = `temp-uploads/${fileName}`;
-
-    // Get file data
-    let fileData;
-    if (file.tempFilePath) {
-      fileData = fs.readFileSync(file.tempFilePath);
-    } else {
-      fileData = file.data;
-    }
-
-    // Upload to Supabase Storage
-    const { data, error } = await supabaseAdmin.storage
-      .from("medevents")
-      .upload(filePath, fileData, {
-        contentType: file.mimetype,
-        cacheControl: "3600",
-      });
-
-    if (error) {
-      console.error("Supabase storage error:", error);
-      return res.status(500).json({
-        message: "Failed to upload temporary document",
-        error: error.message,
-      });
-    }
-
-    // Get the public URL
-    const { data: publicUrlData } = supabaseAdmin.storage
-      .from("medevents")
-      .getPublicUrl(filePath);
-
-    // Clean up temp file if exists
-    if (file.tempFilePath && fs.existsSync(file.tempFilePath)) {
-      fs.unlinkSync(file.tempFilePath);
-    }
-
-    res.status(200).json({
-      url: publicUrlData.publicUrl,
-      storage_path: filePath,
-      name: file.name,
-      type: file.mimetype,
-      size: file.size,
-    });
-  } catch (error) {
-    console.error("Temp document upload error:", error);
     res.status(500).json({ message: error.message });
   }
 });

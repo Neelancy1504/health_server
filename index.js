@@ -50,13 +50,30 @@ app.use(
 );
 app.use(
   fileUpload({
-    limits: { fileSize: 500 * 1024 * 1024 }, // 500MB max file size
+    limits: { 
+      fileSize: 50 * 1024 * 1024, // 50MB max file size
+      files: 10, // Maximum number of files
+    },
     useTempFiles: true,
     tempFileDir: "/tmp/",
     abortOnLimit: false,
     createParentPath: true,
-    debug: true, // Enable debug for troubleshooting
-    parseNested: false, // Simplify parsing
+    debug: false, // Turn off debug to reduce logs
+    parseNested: false,
+    preserveExtension: true,
+    safeFileNames: true,
+    uploadTimeout: 300000, // 5 minutes timeout
+    // Add these new options for better handling
+    defCharset: 'utf8',
+    defParamCharset: 'utf8',
+    // Handle file size limits better
+    limitHandler: (req, res, next) => {
+      console.log("❌ File size limit exceeded");
+      res.status(413).json({
+        success: false,
+        message: "File too large. Maximum size is 50MB."
+      });
+    }
   })
 );
 
@@ -1254,23 +1271,6 @@ app.get("/", (req, res) => {
             }
         </style>
     </head>
-    <body>
-        <div class="container">
-            <div class="logo">
-                <span>💊</span>
-            </div>
-            <h1>MedEvent API Server <span class="status">Online</span></h1>
-            <p>Welcome to the MedEvent API server. This backend service powers the MedEvent mobile application, providing functionalities for medical events management, user authentication, and real-time communication.</p>
-            
-            <h2>API Status</h2>
-            <p>The server is up and running. All systems operational.</p>
-            
-            <h2>Available Endpoints</h2>
-            <p>Some key endpoints include:</p>
-            <div class="endpoint">/api/health</div>
-            <div class="endpoint">/api/auth/login</div>
-            <div class="endpoint">/api/events</div>
-            <div class="endpoint">/api/doctors</div>
             
             <p>This server also supports WebSocket connections for real-time chat functionality.</p>
             
