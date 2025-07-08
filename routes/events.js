@@ -121,8 +121,6 @@ router.get("/pending", verifyToken, verifyRole(["admin"]), async (req, res) => {
 router.post("/", verifyToken, async (req, res) => {
   try {
     const eventData = req.body;
-
-    // Convert the user ID from JWT to a string
     const organizerId = req.user.id.toString();
 
     console.log("Creating event with user ID:", organizerId);
@@ -153,13 +151,46 @@ router.post("/", verifyToken, async (req, res) => {
         speakers: eventData.speakers || [],
         sponsors: eventData.sponsors || [],
         terms_and_conditions: eventData.termsAndConditions || "",
-        brochure: eventData.brochure || null, // Add brochure field
+        brochure: eventData.brochure || null,
+        // Add multi-day fields
+        number_of_days: eventData.numberOfDays || 1,
+        is_multi_day: eventData.isMultiDay || false,
       })
       .select();
 
     if (error) {
       console.error("Supabase insert error:", error);
       throw new Error(error.message);
+    }
+
+    // If multi-day event, create initial day records
+    if (eventData.isMultiDay && eventData.numberOfDays > 1) {
+      const eventDays = [];
+      const startDate = new Date(eventData.startDate);
+
+      for (let i = 0; i < eventData.numberOfDays; i++) {
+        const dayDate = new Date(startDate);
+        dayDate.setDate(startDate.getDate() + i);
+
+        eventDays.push({
+          event_id: data[0].id,
+          day_number: i + 1,
+          date: dayDate.toISOString().split("T")[0], // YYYY-MM-DD format
+          start_time: eventData.start_time,
+          end_time: eventData.end_time,
+          venue: eventData.venue,
+          description: `Day ${i + 1}`,
+        });
+      }
+
+      const { error: daysError } = await supabase
+        .from("event_days")
+        .insert(eventDays);
+
+      if (daysError) {
+        console.error("Error creating event days:", daysError);
+        // Don't fail the event creation, admin can add days later
+      }
     }
 
     // Notify admins about new event request
@@ -702,11 +733,11 @@ router.post("/:id/register", verifyToken, async (req, res) => {
   }
 });
 
-// Update the existing PUT /:id route to better handle admin editing of pending events
-// Update the existing PUT /:id route in events.js to properly handle brochure data
+// Update the existing PUT /:id route
+
 router.put("/:id", verifyToken, async (req, res) => {
   try {
-    const eventId = req.params.id;
+    const eventId = req.params.id; // This is the correct variable name
     const eventData = req.body;
 
     console.log(
@@ -783,6 +814,10 @@ router.put("/:id", verifyToken, async (req, res) => {
       updateData.brochure = eventData.brochure;
     }
 
+    // Add multi-day fields
+    updateData.number_of_days = eventData.numberOfDays || 1;
+    updateData.is_multi_day = eventData.isMultiDay || false;
+
     console.log(
       "Final updateData with brochure:",
       JSON.stringify(updateData.brochure)
@@ -792,12 +827,50 @@ router.put("/:id", verifyToken, async (req, res) => {
     const { data, error } = await supabase
       .from("events")
       .update(updateData)
-      .eq("id", eventId)
+      .eq("id", eventId) // Use eventId consistently
       .select();
 
     if (error) {
       console.error("Update error:", error);
       throw error;
+    }
+
+    // Handle multi-day event logic with correct variable name
+    // If changing from single to multi-day, create initial event days
+    if (eventData.isMultiDay && eventData.numberOfDays > 1) {
+      // Check if event days already exist
+      const { data: existingDays } = await supabase
+        .from("event_days")
+        .select("*")
+        .eq("event_id", eventId); // Fixed: use eventId instead of id
+
+      // Only create days if they don't exist
+      if (!existingDays || existingDays.length === 0) {
+        const eventDays = [];
+        const startDate = new Date(eventData.startDate);
+
+        for (let i = 0; i < eventData.numberOfDays; i++) {
+          const dayDate = new Date(startDate);
+          dayDate.setDate(startDate.getDate() + i);
+
+          eventDays.push({
+            event_id: eventId, // Fixed: use eventId instead of id
+            day_number: i + 1,
+            date: dayDate.toISOString().split("T")[0], // YYYY-MM-DD format
+            start_time: eventData.start_time,
+            end_time: eventData.end_time,
+            venue: eventData.venue,
+            description: `Day ${i + 1}`,
+          });
+        }
+
+        await supabase.from("event_days").insert(eventDays);
+      }
+    }
+
+    // If changing from multi-day to single-day, remove event days
+    if (!eventData.isMultiDay || eventData.numberOfDays === 1) {
+      await supabase.from("event_days").delete().eq("event_id", eventId); // Fixed: use eventId instead of id
     }
 
     res.json({
@@ -911,6 +984,86 @@ router.get("/:id/brochure", async (req, res) => {
     res.json(brochureData[0]);
   } catch (error) {
     console.error("Error fetching event brochure:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Get event days
+router.get("/:id/days", async (req, res) => {
+  try {
+    const eventId = req.params.id;
+
+    const { data: eventDays, error } = await supabase
+      .from("event_days")
+      .select("*")
+      .eq("event_id", eventId)
+      .order("day_number", { ascending: true });
+
+    if (error) throw error;
+
+    res.json(eventDays);
+  } catch (error) {
+    console.error("Error fetching event days:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Register for specific event days
+router.post("/:id/register-days", verifyToken, async (req, res) => {
+  try {
+    const eventId = req.params.id;
+    const userId = req.user.id;
+    const { registrationType, selectedDays } = req.body;
+
+    // Check if event exists
+    const { data: event, error: eventError } = await supabase
+      .from("events")
+      .select("*")
+      .eq("id", eventId)
+      .single();
+
+    if (eventError) throw eventError;
+    if (!event) {
+      return res.status(404).json({ message: "Event not found" });
+    }
+
+    // Check if user is already registered
+    const { data: existingReg, error: checkError } = await supabase
+      .from("event_registrations")
+      .select("*")
+      .eq("event_id", eventId)
+      .eq("user_id", userId);
+
+    if (checkError) throw checkError;
+
+    if (existingReg && existingReg.length > 0) {
+      return res.status(400).json({
+        message: "You are already registered for this event",
+      });
+    }
+
+    // Create registration record
+    const registrationRecord = {
+      event_id: eventId,
+      user_id: userId,
+      registered_at: new Date().toISOString(),
+      registration_type: registrationType,
+      selected_days: registrationType === "specific_days" ? selectedDays : null,
+    };
+
+    const { error: regError } = await supabase
+      .from("event_registrations")
+      .insert(registrationRecord);
+
+    if (regError) throw regError;
+
+    res.status(200).json({
+      message: "Registration successful",
+      registrationType,
+      selectedDays: registrationType === "specific_days" ? selectedDays : null,
+    });
+  } catch (error) {
+    console.error("Registration error:", error);
     res.status(500).json({ message: error.message });
   }
 });

@@ -1107,4 +1107,55 @@ router.get(
   }
 );
 
+// Get event days for management
+router.get("/events/:id/days", verifyToken, adminOnly, async (req, res) => {
+  try {
+    const eventId = req.params.id;
+
+    const { data: eventDays, error } = await supabase
+      .from("event_days")
+      .select("*")
+      .eq("event_id", eventId)
+      .order("day_number", { ascending: true });
+
+    if (error) throw error;
+
+    res.json(eventDays);
+  } catch (error) {
+    console.error("Error fetching event days:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Update event days
+router.put("/events/:id/days", verifyToken, adminOnly, async (req, res) => {
+  try {
+    const eventId = req.params.id;
+    const { eventDays } = req.body;
+
+    // Update each day
+    for (const day of eventDays) {
+      const { error } = await supabase
+        .from("event_days")
+        .update({
+          venue: day.venue,
+          venue_address: day.venue_address,
+          start_time: day.start_time,
+          end_time: day.end_time,
+          description: day.description,
+          capacity: day.capacity,
+          special_notes: day.special_notes,
+        })
+        .eq("id", day.id);
+
+      if (error) throw error;
+    }
+
+    res.json({ message: "Event days updated successfully" });
+  } catch (error) {
+    console.error("Error updating event days:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
 module.exports = router;
