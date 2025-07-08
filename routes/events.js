@@ -121,15 +121,13 @@ router.get("/pending", verifyToken, verifyRole(["admin"]), async (req, res) => {
 router.post("/", verifyToken, async (req, res) => {
   try {
     const eventData = req.body;
-
-    // Convert the user ID from JWT to a string
     const organizerId = req.user.id.toString();
 
     console.log("Creating event with user ID:", organizerId);
     console.log("Event data:", eventData);
 
-    // Insert to Supabase
-    const { data, error } = await supabase
+    // Insert main event to Supabase
+    const { data: eventResult, error } = await supabase
       .from("events")
       .insert({
         title: eventData.title,
@@ -153,13 +151,41 @@ router.post("/", verifyToken, async (req, res) => {
         speakers: eventData.speakers || [],
         sponsors: eventData.sponsors || [],
         terms_and_conditions: eventData.termsAndConditions || "",
-        brochure: eventData.brochure || null, // Add brochure field
+        brochure: eventData.brochure || null,
       })
-      .select();
+      .select()
+      .single();
 
     if (error) {
       console.error("Supabase insert error:", error);
       throw new Error(error.message);
+    }
+
+    // Insert event days if provided
+    if (eventData.eventDays && eventData.eventDays.length > 0) {
+      const eventDaysData = eventData.eventDays.map((day) => ({
+        event_id: eventResult.id,
+        day_number: day.dayNumber,
+        date: day.date,
+        start_time: day.startTime,
+        end_time: day.endTime,
+        venue: day.venue,
+        venue_address: day.venueAddress,
+        description: day.description,
+        capacity: day.capacity,
+        special_notes: day.specialNotes,
+      }));
+
+      const { error: daysError } = await supabase
+        .from("event_days")
+        .insert(eventDaysData);
+
+      if (daysError) {
+        console.error("Error inserting event days:", daysError);
+        // You might want to delete the event if days insertion fails
+        // await supabase.from("events").delete().eq("id", eventResult.id);
+        // throw new Error("Failed to create event days");
+      }
     }
 
     // Notify admins about new event request
@@ -169,7 +195,7 @@ router.post("/", verifyToken, async (req, res) => {
       `A new event "${eventData.title}" requires approval`,
       {
         type: "pending_event",
-        id: data[0].id,
+        id: eventResult.id,
         action: "approval",
       }
     );
@@ -179,7 +205,7 @@ router.post("/", verifyToken, async (req, res) => {
         req.user.role === "admin"
           ? "Event created successfully"
           : "Event submitted for approval",
-      event: data[0],
+      event: eventResult,
       requiresApproval: req.user.role !== "admin",
     });
   } catch (error) {
@@ -1102,5 +1128,25 @@ router.put(
     }
   }
 );
+
+// Add a new route to get event days - add this before module.exports
+router.get("/:id/days", async (req, res) => {
+  try {
+    const eventId = req.params.id;
+
+    const { data: eventDays, error } = await supabase
+      .from("event_days")
+      .select("*")
+      .eq("event_id", eventId)
+      .order("day_number", { ascending: true });
+
+    if (error) throw error;
+
+    res.json(eventDays || []);
+  } catch (error) {
+    console.error("Error fetching event days:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
 
 module.exports = router;
