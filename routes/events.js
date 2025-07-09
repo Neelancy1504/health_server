@@ -826,6 +826,39 @@ router.put("/:id", verifyToken, async (req, res) => {
       throw error;
     }
 
+    // Handle event days updates (admin only)
+    if (req.user.role === "admin" && eventData.eventDays) {
+      // Delete existing event days
+      await supabase
+        .from("event_days")
+        .delete()
+        .eq("event_id", eventId);
+
+      // Insert new event days
+      if (eventData.eventDays.length > 0) {
+        const eventDaysData = eventData.eventDays.map((day) => ({
+          event_id: eventId,
+          day_number: day.dayNumber,
+          date: day.date,
+          start_time: day.startTime,
+          end_time: day.endTime,
+          venue: day.venue,
+          venue_address: day.venueAddress,
+          description: day.description,
+          capacity: day.capacity,
+          special_notes: day.specialNotes,
+        }));
+
+        const { error: daysError } = await supabase
+          .from("event_days")
+          .insert(eventDaysData);
+
+        if (daysError) {
+          console.error("Error updating event days:", daysError);
+        }
+      }
+    }
+
     res.json({
       message: "Event updated successfully",
       event: data[0],
