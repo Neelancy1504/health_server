@@ -10,6 +10,7 @@ const verifyToken = require("./middleware/authMiddleware");
 const { adminOnly } = require("./middleware/roleMiddleware");
 const notificationService = require("./services/notificationService");
 const courseRoutes = require('./routes/courses');
+const cron = require('node-cron');
 // Update the ADMIN_SUPPORT_ID to use a real admin UUID
 // Use Sahil bhai's ID from your database
 const ADMIN_SUPPORT_ID = "66768b81-2d00-4eca-9145-4cf11f687fe8";
@@ -1657,3 +1658,96 @@ app.post("/api/verify-fcm-token", verifyToken, async (req, res) => {
       .json({ success: false, message: "Server error", error: error.message });
   }
 });
+
+// Function to cleanup unverified accounts
+const cleanupUnverifiedAccounts = async () => {
+  try {
+    console.log('🧹 Starting cleanup of unverified accounts...');
+    
+    // Calculate 24 hours ago
+    const twentyFourHoursAgo = new Date();
+    twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+    
+    // Get count before deletion for logging
+    const { count: beforeCount, error: countError } = await supabase
+      .from('users')
+      .select('*', { count: 'exact', head: true })
+      .eq('email_verified', false)
+      .lt('created_at', twentyFourHoursAgo.toISOString());
+
+    if (countError) {
+      console.error('Error counting unverified accounts:', countError);
+      return;
+    }
+
+    if (beforeCount === 0) {
+      console.log('✅ No unverified accounts to cleanup');
+      return;
+    }
+
+    // Delete unverified accounts older than 24 hours
+    const { data, error } = await supabase
+      .from('users')
+      .delete()
+      .eq('email_verified', false)
+      .lt('created_at', twentyFourHoursAgo.toISOString());
+
+    if (error) {
+      console.error('❌ Error deleting unverified accounts:', error);
+      return;
+    }
+
+    console.log(`✅ Cleanup completed: Deleted ${beforeCount} unverified accounts older than 24 hours`);
+    
+    // Optional: Clean up related data (OTPs, tokens, etc.)
+    await cleanupRelatedData();
+    
+  } catch (error) {
+    console.error('❌ Error in cleanup function:', error);
+  }
+};
+
+// Function to cleanup related data
+const cleanupRelatedData = async () => {
+  try {
+    // Cleanup expired OTPs
+    const { error: otpError } = await supabase
+      .from('email_otps')
+      .delete()
+      .lt('expires_at', new Date().toISOString());
+
+    if (otpError) {
+      console.error('Error cleaning up expired OTPs:', otpError);
+    } else {
+      console.log('✅ Cleaned up expired OTPs');
+    }
+
+    // Cleanup expired verification tokens
+    const { error: tokenError } = await supabase
+      .from('verification_tokens')
+      .delete()
+      .lt('expires_at', new Date().toISOString());
+
+    if (tokenError) {
+      console.error('Error cleaning up expired tokens:', tokenError);
+    } else {
+      console.log('✅ Cleaned up expired verification tokens');
+    }
+
+  } catch (error) {
+    console.error('Error cleaning up related data:', error);
+  }
+};
+
+// Schedule the cleanup to run daily at 11:59 PM
+cron.schedule('59 23 * * *', () => {
+  console.log('🕒 Running scheduled cleanup of unverified accounts...');
+  cleanupUnverifiedAccounts();
+}, {
+  timezone: "UTC" // Use UTC or your preferred timezone
+});
+
+// Optional: Run cleanup immediately on server start for testing
+// cleanupUnverifiedAccounts();
+
+console.log('📅 Scheduled daily cleanup of unverified accounts at 11:59 PM UTC');

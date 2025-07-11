@@ -346,37 +346,59 @@ router.get("/my-events", verifyToken, async (req, res) => {
 });
 
 // Get ongoing events
-router.get("/ongoing", async (req, res) => {
+router.get("/ongoing", verifyToken, async (req, res) => {
   try {
-    const now = new Date().toISOString();
+    const userId = req.user.id;
+    const today = new Date();
+    const todayDateString = today.toISOString().split('T')[0]; // YYYY-MM-DD
 
+    // Get all events the user is registered for
+    const { data: registrations, error: regError } = await supabase
+      .from("event_registrations")
+      .select("event_id")
+      .eq("user_id", userId);
+
+    if (regError) throw regError;
+    if (!registrations || registrations.length === 0) return res.json([]);
+
+    const registeredEventIds = registrations.map(reg => reg.event_id);
+
+    // Get all approved events the user is registered for
     const { data: events, error } = await supabase
       .from("events")
       .select("*")
-      .eq("status", "approved")
-      .lt("start_date", now)
-      .gt("end_date", now)
-      .order("start_date", { ascending: true });
+      .in("id", registeredEventIds)
+      .eq("status", "approved");
 
     if (error) throw error;
 
-    // Format to match frontend expectations
-    const formattedEvents = events.map((event) => ({
+    // Filter events that are ongoing today (inclusive)
+    const ongoingEvents = events.filter(event => {
+      const startDate = event.start_date.split('T')[0];
+      const endDate = event.end_date.split('T')[0];
+      return todayDateString >= startDate && todayDateString <= endDate;
+    });
+
+    // Format to match frontend expectations - THIS IS THE KEY FIX
+    const formattedEvents = ongoingEvents.map((event) => ({
       id: event.id,
       title: event.title,
       description: event.description,
       type: event.type,
       mode: event.mode,
       venue: event.venue,
-      startDate: event.start_date,
-      endDate: event.end_date,
+      startDate: event.start_date, // Frontend expects startDate, not start_date
+      endDate: event.end_date,     // Frontend expects endDate, not end_date
       start_time: event.start_time,
       end_time: event.end_time,
       organizerName: event.organizer_name,
       organizerEmail: event.organizer_email,
-      organizer_id: event.organizer_id, // Add this
+      organizerPhone: event.organizer_phone,
+      organizer_id: event.organizer_id,
       status: event.status,
       capacity: event.capacity,
+      website: event.website,
+      registrationFee: event.registration_fee,
     }));
 
     res.json(formattedEvents);
