@@ -26,10 +26,77 @@ try {
 }
 
 const notificationService = {
+  // Generate UUID helper
+  generateUUID() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  },
+
+  // Save notification to database
+  async saveNotificationToDatabase(userId, title, body, data = {}) {
+    try {
+      const cleanUserId = String(userId).trim();
+
+      // Basic validation
+      if (!cleanUserId || !title || !body) {
+        const errorMsg = `Missing required fields: userId=${cleanUserId}, title=${title}, body=${body}`;
+        console.error("❌ Basic validation failed:", errorMsg);
+        throw new Error(errorMsg);
+      }
+
+      // Create notification record
+      const notificationRecord = {
+        id: this.generateUUID(),
+        user_id: cleanUserId,
+        title: String(title),
+        body: String(body),
+        data: data || {},
+        read: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      console.log("💾 Saving notification to database:", {
+        userId: cleanUserId,
+        title,
+        body,
+        data
+      });
+
+      // Insert into database
+      const { data: result, error } = await supabase
+        .from("notifications")
+        .insert(notificationRecord)
+        .select("*");
+
+      if (error) {
+        console.error("❌ Database insertion error:", error);
+        throw error;
+      }
+
+      if (!result || result.length === 0) {
+        const errorMsg = "❌ Notification insert returned no data";
+        console.error(errorMsg);
+        throw new Error(errorMsg);
+      }
+
+      console.log("✅ Notification saved successfully:", result[0]);
+      return result[0];
+    } catch (error) {
+      console.error("❌ Error saving notification to database:", error);
+      throw error;
+    }
+  },
+
   // Send to specific user
   async sendToUser(userId, title, body, data = {}) {
     try {
       console.log(`Sending notification to user: ${userId}`);
+
+      // Always save to database first
+      await this.saveNotificationToDatabase(userId, title, body, data);
 
       // Get user's FCM tokens
       const { data: tokens, error } = await supabase
@@ -61,6 +128,11 @@ const notificationService = {
     try {
       console.log(`Sending notifications to ${userIds.length} users`);
 
+      // Save to database for each user
+      for (const userId of userIds) {
+        await this.saveNotificationToDatabase(userId, title, body, data);
+      }
+
       // Get tokens for multiple users
       const { data: tokens, error } = await supabase
         .from("user_fcm_tokens")
@@ -89,12 +161,12 @@ const notificationService = {
   // Send to users with a specific role
   async sendToRole(role, title, body, data = {}) {
     try {
-      console.log(`Sending notifications to role: ${role}`);
+      console.log(`📬 sendToRole called for role: ${role}`);
 
       // Get users with the role
       const { data: users, error } = await supabase
         .from("users")
-        .select("id")
+        .select("id, email, name")
         .eq("role", role);
 
       if (error) {
@@ -107,12 +179,64 @@ const notificationService = {
         return;
       }
 
-      const userIds = users.map((u) => u.id);
-      console.log(`Found ${userIds.length} users with role ${role}`);
+      console.log(`📊 Found ${users.length} users with role ${role}`);
+      console.log("📊 Users:", users);
 
+      // Save notification to database for each user
+      let successCount = 0;
+      let failureCount = 0;
+
+      for (const user of users) {
+        try {
+          await this.saveNotificationToDatabase(user.id, title, body, data);
+          console.log(`✅ Saved notification for ${role} user: ${user.id} (${user.email})`);
+          successCount++;
+        } catch (error) {
+          console.error(`❌ Failed to save notification for user ${user.id}:`, error);
+          failureCount++;
+        }
+      }
+
+      console.log(`✅ Notifications for role ${role}: ${successCount} successful, ${failureCount} failed`);
+
+      // Send FCM notifications
+      const userIds = users.map((u) => u.id);
       return this.sendToUsers(userIds, title, body, data);
     } catch (error) {
       console.error("Error sending notification to role:", error);
+    }
+  },
+
+  // Send to all users
+  async sendToAll(title, body, data = {}) {
+    try {
+      console.log("Sending notifications to all users");
+
+      // Get all users
+      const { data: users, error } = await supabase
+        .from("users")
+        .select("id");
+
+      if (error) {
+        console.error("Error fetching all users:", error);
+        return;
+      }
+
+      if (!users || users.length === 0) {
+        console.log("No users found");
+        return;
+      }
+
+      // Save notification to database for each user
+      for (const user of users) {
+        await this.saveNotificationToDatabase(user.id, title, body, data);
+      }
+
+      // Send FCM notifications
+      const userIds = users.map((u) => u.id);
+      return this.sendToUsers(userIds, title, body, data);
+    } catch (error) {
+      console.error("Error sending notification to all users:", error);
     }
   },
 
@@ -146,15 +270,15 @@ const notificationService = {
           // Convert all values to strings for FCM compatibility
           title: String(title),
           body: String(body),
-          type: String(data.type || "chat_message"),
-          action: String(data.action || "open_chat"),
+          type: String(data.type || "notification"),
+          action: String(data.action || "view"),
           id: String(data.id || ""),
           click_action: "FLUTTER_NOTIFICATION_CLICK",
         },
         android: {
           priority: "high",
           notification: {
-            channel_id: "chat_messages",
+            channel_id: "default_notifications",
             priority: "high",
             default_sound: true,
             default_vibrate_timings: true,
@@ -166,7 +290,7 @@ const notificationService = {
               contentAvailable: true,
               sound: "default",
               badge: 1,
-              category: "chat_message",
+              category: "notification",
             },
           },
         },

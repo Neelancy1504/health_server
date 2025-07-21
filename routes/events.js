@@ -5,6 +5,101 @@ const { verifyRole } = require("../middleware/roleMiddleware"); // Fixed import 
 const { supabase } = require("../config/supabase");
 const notificationService = require("../services/notificationService");
 
+// Get notifications for the current user
+router.get("/notifications", verifyToken, async (req, res) => {
+  try {
+    console.log(`📱 Notifications endpoint hit by user: ${req.user.id}`);
+    console.log(`📱 User details:`, { id: req.user.id, email: req.user.email, role: req.user.role });
+
+    const { data: notifications, error } = await supabase
+      .from("notifications")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("❌ Error fetching notifications:", error);
+      throw error;
+    }
+
+    console.log(`📱 Found ${notifications?.length || 0} notifications for user ${req.user.id}`);
+    console.log(`📱 Sample notification:`, notifications?.[0]);
+
+    res.json(notifications || []);
+  } catch (error) {
+    console.error("❌ Error in notifications endpoint:", error);
+    res.status(500).json({ 
+      message: error.message,
+      error: process.env.NODE_ENV === 'development' ? error : {}
+    });
+  }
+});
+
+// Mark notification as read
+router.put("/notifications/:notificationId/read", verifyToken, async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    
+    console.log(`📱 Marking notification ${notificationId} as read for user ${req.user.id}`);
+    
+    const { data, error } = await supabase
+      .from("notifications")
+      .update({ 
+        read: true, 
+        read_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", notificationId)
+      .eq("user_id", req.user.id) // Ensure user can only update their own notifications
+      .select();
+
+    if (error) {
+      console.error("❌ Error marking notification as read:", error);
+      throw error;
+    }
+    
+    console.log(`✅ Notification ${notificationId} marked as read`);
+    res.json({ message: "Notification marked as read", notification: data[0] });
+  } catch (error) {
+    console.error("Error marking notification as read:", error);
+    res.status(500).json({ 
+      message: error.message,
+      error: process.env.NODE_ENV === 'development' ? error : {}
+    });
+  }
+});
+
+// Mark all notifications as read
+router.put("/notifications/mark-all-read", verifyToken, async (req, res) => {
+  try {
+    console.log(`📱 Marking all notifications as read for user ${req.user.id}`);
+    
+    const { data, error } = await supabase
+      .from("notifications")
+      .update({ 
+        read: true, 
+        read_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .eq("user_id", req.user.id)
+      .eq("read", false);
+
+    if (error) {
+      console.error("❌ Error marking all notifications as read:", error);
+      throw error;
+    }
+    
+    console.log(`✅ Marked ${data?.length || 0} notifications as read for user ${req.user.id}`);
+    res.json({ message: "All notifications marked as read", count: data?.length || 0 });
+  } catch (error) {
+    console.error("Error marking all notifications as read:", error);
+    res.status(500).json({ 
+      message: error.message,
+      error: process.env.NODE_ENV === 'development' ? error : {}
+    });
+  }
+});
+
 // Get registered events for the current user
 router.get("/registered", verifyToken, async (req, res) => {
   try {
@@ -408,10 +503,31 @@ router.get("/ongoing", verifyToken, async (req, res) => {
   }
 });
 
-// Get event by ID
+// Update the get event by ID route to add better validation:
 router.get("/:id", async (req, res) => {
   try {
     const eventId = req.params.id;
+    
+    console.log('📍 GET /events/:id called with ID:', eventId);
+    
+    // Validate that eventId is not "notifications"
+    if (eventId === 'notifications') {
+      console.error('❌ Invalid eventId received: "notifications"');
+      return res.status(400).json({ 
+        message: 'Invalid event ID format',
+        received: eventId 
+      });
+    }
+    
+    // Validate UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(eventId)) {
+      console.error('❌ Invalid UUID format:', eventId);
+      return res.status(400).json({ 
+        message: 'Invalid UUID format for event ID',
+        received: eventId 
+      });
+    }
 
     // Query for the event with all fields, including brochure
     const { data: event, error } = await supabase
@@ -420,9 +536,13 @@ router.get("/:id", async (req, res) => {
       .eq("id", eventId)
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('❌ Supabase error:', error);
+      throw error;
+    }
 
     if (!event) {
+      console.log('❌ Event not found for ID:', eventId);
       return res.status(404).json({ message: "Event not found" });
     }
 
@@ -441,7 +561,7 @@ router.get("/:id", async (req, res) => {
       organizerName: event.organizer_name,
       organizerEmail: event.organizer_email,
       organizerPhone: event.organizer_phone,
-      organizer_id: event.organizer_id, // Add this
+      organizer_id: event.organizer_id,
       status: event.status,
       capacity: event.capacity,
       website: event.website,
@@ -458,9 +578,10 @@ router.get("/:id", async (req, res) => {
         : null,
     };
 
+    console.log('✅ Event found and returning formatted data');
     res.json(formattedEvent);
   } catch (error) {
-    console.error("Get event error:", error);
+    console.error("❌ Get event error:", error);
     res.status(500).json({ message: error.message });
   }
 });
