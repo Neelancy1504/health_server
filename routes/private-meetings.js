@@ -6,7 +6,7 @@ const { supabase } = require("../config/supabase");
 const notificationService = require('../services/notificationService');
 
 // Create a new private meeting (pharma only)
-router.post("/", verifyToken, verifyRole(["pharma", "admin"]), async (req, res) => {
+router.post("/", verifyToken, verifyRole(["pharma", "admin", "doctor"]), async (req, res) => {
   try {
     const {
       title,
@@ -18,62 +18,37 @@ router.post("/", verifyToken, verifyRole(["pharma", "admin"]), async (req, res) 
       venue,
       mode,
       meetingLink,
-      invitedDoctors,
-      organizerName, // Now explicitly accepting this from frontend
+      invitedMembers, // Accept invitedMembers from frontend
+      invitedDoctors, // Keep for backward compatibility
+      organizerName,
     } = req.body;
 
-    // Log the received data for debugging
-    console.log("Creating meeting with data:", {
-      title,
-      startDate,
-      endDate,
-      startTime,
-      endTime,
-      venue,
-      mode,
-      organizerName,
-    });
+    // Use invitedMembers if available, otherwise fall back to invitedDoctors
+    const membersToInvite = invitedMembers || invitedDoctors || [];
 
     // Validate required fields
-    if (
-      !title ||
-      !startDate ||
-      !endDate ||
-      !startTime ||
-      !endTime ||
-      !venue ||
-      !mode
-    ) {
+    if (!title || !startDate || !endDate || !startTime || !endTime || !venue || !mode) {
       return res.status(400).json({
         message: "Missing required fields",
-        received: {
-          title,
-          startDate,
-          endDate,
-          startTime,
-          endTime,
-          venue,
-          mode,
-        },
+        received: { title, startDate, endDate, startTime, endTime, venue, mode },
       });
     }
 
-    if (!Array.isArray(invitedDoctors) || invitedDoctors.length === 0) {
-      return res
-        .status(400)
-        .json({ message: "You must invite at least one doctor" });
+    if (!Array.isArray(membersToInvite) || membersToInvite.length === 0) {
+      return res.status(400).json({ 
+        message: "You must invite at least one member",
+        received: { invitedMembers, invitedDoctors, membersToInvite }
+      });
     }
 
-    // Create the private meeting with fallback for organizer_name
+    // Create the private meeting
     const { data: meeting, error: meetingError } = await supabase
       .from("private_meetings")
       .insert({
         title,
         description,
         organizer_id: req.user.id,
-        // Use provided organizerName or fall back to user context name or a default
-        organizer_name:
-          organizerName || req.user.name || "Pharmaceutical Representative",
+        organizer_name: organizerName || req.user.name || "Organizer",
         start_date: startDate,
         end_date: endDate,
         start_time: startTime,
@@ -82,32 +57,66 @@ router.post("/", verifyToken, verifyRole(["pharma", "admin"]), async (req, res) 
         mode,
         meeting_link: meetingLink || null,
       })
-      .select();
+      .select()
+      .single();
 
     if (meetingError) {
       console.error("Error creating private meeting:", meetingError);
       throw meetingError;
     }
 
-    // Notify invited doctors
-    const meetingInvitations = meeting[0].invitations || [];
-    
-    for (const invitation of meetingInvitations) {
-      await notificationService.sendToUser(invitation.doctor_id, 
-        'New Meeting Invitation', 
-        `You've been invited to a meeting: ${meeting[0].title}`, 
-        {
-          type: 'meeting_invitation',
-          id: meeting[0].id,
-          action: 'view_invitation'
-        }
-      );
+    // Insert invitations for all invited members
+    const invitations = membersToInvite.map(user => ({
+      meeting_id: meeting.id,
+      doctor_id: user.id, // keep this field name for compatibility
+      doctor_name: user.name,
+      doctor_email: user.email,
+      status: 'pending',
+    }));
+
+    const { error: invitationsError } = await supabase
+      .from("meeting_invitations")
+      .insert(invitations);
+
+    if (invitationsError) {
+      console.error("Error inserting meeting invitations:", invitationsError);
     }
-    
+
+    // Send notification to each invited member
+    for (const user of membersToInvite) {
+      try {
+        await notificationService.sendToUser(
+          user.id,
+          'New Meeting Invitation',
+          `You've been invited to a meeting: ${meeting.title}`,
+          {
+            type: 'meeting_invitation',
+            id: meeting.id,
+            action: 'view_invitation'
+          }
+        );
+        console.log(`📧 Sent meeting invitation notification to ${user.name} (${user.email})`);
+      } catch (notificationError) {
+        console.error(`❌ Failed to send notification to ${user.name}:`, notificationError);
+      }
+    }
+
+    // Notify admins about new private meeting
+    await notificationService.sendToRole(
+      "admin",
+      "New Private Meeting Created",
+      `A new private meeting "${title}" has been created by ${req.user.name}`,
+      {
+        type: "private_meeting_created",
+        id: meeting.id,
+        action: "view",
+      }
+    );
+
     res.status(201).json({
       message: "Private meeting created and invitations sent successfully",
-      meeting: meeting[0],
-      invitedDoctors: meetingInvitations.length,
+      meeting,
+      invitedMembers: membersToInvite.length,
     });
   } catch (error) {
     console.error("Private meeting creation error:", error);
@@ -364,13 +373,10 @@ router.put(
   }
 );
 
-// Get doctors for invitation selection (pharma or admin)
+// Get doctors for invitation selection (allow all authenticated users)
 router.get("/doctors/available", verifyToken, async (req, res) => {
   try {
-    if (!["pharma", "admin"].includes(req.user.role)) {
-      return res.status(403).json({ message: "Unauthorized" });
-    }
-
+    // Remove the role check so any logged-in user can fetch doctors
     // Get verified doctors
     const { data: doctors, error } = await supabase
       .from("users")

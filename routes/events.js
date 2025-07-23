@@ -220,6 +220,7 @@ router.post("/", verifyToken, async (req, res) => {
 
     console.log("Creating event with user ID:", organizerId);
     console.log("Event data:", eventData);
+    console.log("Invited members:", eventData.invitedMembers);
 
     // Insert main event to Supabase
     const { data: eventResult, error } = await supabase
@@ -247,6 +248,8 @@ router.post("/", verifyToken, async (req, res) => {
         sponsors: eventData.sponsors || [],
         terms_and_conditions: eventData.termsAndConditions || "",
         brochure: eventData.brochure || null,
+        // ADD: Store invited members as JSON
+        invited_members: eventData.invitedMembers || null,
       })
       .select()
       .single();
@@ -277,9 +280,7 @@ router.post("/", verifyToken, async (req, res) => {
 
       if (daysError) {
         console.error("Error inserting event days:", daysError);
-        // You might want to delete the event if days insertion fails
-        // await supabase.from("events").delete().eq("id", eventResult.id);
-        // throw new Error("Failed to create event days");
+        throw daysError;
       }
     }
 
@@ -587,6 +588,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // Approve event (admin only)
+// Update the approve event route in health_server/routes/events.js
 router.put(
   "/:id/approve",
   verifyToken,
@@ -615,7 +617,7 @@ router.put(
 
       // Notify event creator
       await notificationService.sendToUser(
-        event.created_by,
+        event.organizer_id,
         "Event Approved",
         `Your event "${event.title}" has been approved!`,
         {
@@ -625,16 +627,42 @@ router.put(
         }
       );
 
-      // Notify all users about new event
-      await notificationService.sendToAll(
-        "New Event Available",
-        `Check out the new event: ${event.title}`,
-        {
-          type: "new_event",
-          id: event.id,
-          action: "view",
+      // UPDATED: Send notification based on invited members
+      if (event.invited_members && Array.isArray(event.invited_members) && event.invited_members.length > 0) {
+        console.log(`📧 Sending new event notifications to ${event.invited_members.length} invited members`);
+        
+        // Send notification only to invited members
+        for (const member of event.invited_members) {
+          try {
+            await notificationService.sendToUser(
+              member.id,
+              "New Event Available",
+              `You've been invited to a new event: ${event.title}`,
+              {
+                type: "new_event",
+                id: event.id,
+                action: "view",
+              }
+            );
+            console.log(`📧 Sent new event notification to ${member.name} (${member.email})`);
+          } catch (notificationError) {
+            console.error(`❌ Failed to send notification to ${member.name}:`, notificationError);
+          }
         }
-      );
+      } else {
+        console.log(`📧 No invited members found, sending notification to all users`);
+        
+        // If no specific members were invited, send to all users (existing behavior)
+        await notificationService.sendToAll(
+          "New Event Available",
+          `Check out the new event: ${event.title}`,
+          {
+            type: "new_event",
+            id: event.id,
+            action: "view",
+          }
+        );
+      }
 
       res.json({ message: "Event approved successfully", event });
     } catch (error) {

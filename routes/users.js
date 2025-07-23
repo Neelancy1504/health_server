@@ -196,4 +196,27 @@ router.delete("/fcm-token", verifyToken, async (req, res) => {
   }
 });
 
+// Add to users.js route
+router.get("/available", verifyToken, async (req, res) => {
+  try {
+    console.log("🔎 /users/available called by user:", req.user.id, req.user.email, req.user.role);
+
+    const { data: users, error } = await supabase
+      .from("users")
+      .select("id, name, email, role, degree, company, verified")
+      .eq("verified", true)
+      .neq("id", req.user.id);
+
+    if (error) {
+      console.error("❌ Supabase error in /users/available:", error);
+      throw error;
+    }
+    console.log("✅ /users/available returned", users?.length, "users");
+    res.json(users);
+  } catch (error) {
+    console.error("❌ Error in /users/available:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
 module.exports = router;
