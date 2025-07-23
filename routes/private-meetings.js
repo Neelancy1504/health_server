@@ -128,7 +128,7 @@ router.post("/", verifyToken, verifyRole(["pharma", "admin", "doctor"]), async (
 router.get(
   "/organized",
   verifyToken,
-  verifyRole(["pharma"]),
+  verifyRole(["pharma", "doctor"]),
   async (req, res) => {
     try {
       const { data: meetings, error } = await supabase
@@ -162,7 +162,7 @@ router.get(
 router.get(
   "/invited",
   verifyToken,
-  verifyRole(["doctor"]),
+  verifyRole(["doctor", "pharma"]),
   async (req, res) => {
     try {
       const { data: invitations, error } = await supabase
