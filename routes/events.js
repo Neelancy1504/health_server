@@ -284,25 +284,43 @@ router.post("/", verifyToken, async (req, res) => {
       }
     }
 
-    // Notify admins about new event request
-    await notificationService.sendToRole(
-      "admin",
-      "New Event Request",
-      `A new event "${eventData.title}" requires approval`,
-      {
-        type: "pending_event",
-        id: eventResult.id,
-        action: "approval",
-      }
-    );
+    // Send notification based on event type and status
+    const eventStatus = req.user.role === "admin" ? "approved" : "pending";
+    
+    if (eventStatus === "approved") {
+      // If auto-approved (admin created), notify all users about new event
+      console.log("📢 Sending 'New Event Available' notification (admin created)");
+      
+      await notificationService.sendToRole(
+        "doctor", // or "all" if you want to notify everyone
+        "New Event Available! 🎉",
+        `Check out the new event: "${eventData.title}"`,
+        {
+          type: "new_event",
+          id: eventResult.id,
+          action: "view",
+        }
+      );
+    } else {
+      // If pending approval, notify admins only
+      console.log("📢 Sending 'Pending Event' notification to admins");
+      
+      await notificationService.sendToRole(
+        "admin",
+        "New Event Pending Approval",
+        `A new event "${eventData.title}" requires approval`,
+        {
+          type: "pending_event",
+          id: eventResult.id,
+          action: "approval",
+        }
+      );
+    }
 
     res.status(201).json({
-      message:
-        req.user.role === "admin"
-          ? "Event created successfully"
-          : "Event submitted for approval",
+      message: "Event created successfully",
       event: eventResult,
-      requiresApproval: req.user.role !== "admin",
+      requiresApproval: eventStatus === "pending",
     });
   } catch (error) {
     console.error("Event creation error:", error);
@@ -595,31 +613,32 @@ router.put(
   verifyRole(["admin"]),
   async (req, res) => {
     try {
+      const { id: eventId } = req.params;
       const { notes } = req.body;
 
+      // Update event status
       const { data: event, error } = await supabase
         .from("events")
         .update({
           status: "approved",
-          verification_notes: notes,
           verified_by: req.user.id,
           verified_at: new Date().toISOString(),
+          verification_notes: notes,
         })
-        .eq("id", req.params.id)
+        .eq("id", eventId)
         .select()
         .single();
 
       if (error) throw error;
 
-      if (!event) {
-        return res.status(404).json({ message: "Event not found" });
-      }
+      // Send notifications
+      console.log("📢 Event approved - sending notifications");
 
-      // Notify event creator
+      // 1. Notify event organizer
       await notificationService.sendToUser(
         event.organizer_id,
-        "Event Approved",
-        `Your event "${event.title}" has been approved!`,
+        "Event Approved! 🎉",
+        `Great news! Your event "${event.title}" has been approved and is now live for registrations.`,
         {
           type: "event_approval",
           id: event.id,
@@ -627,44 +646,24 @@ router.put(
         }
       );
 
-      // UPDATED: Send notification based on invited members
-      if (event.invited_members && Array.isArray(event.invited_members) && event.invited_members.length > 0) {
-        console.log(`📧 Sending new event notifications to ${event.invited_members.length} invited members`);
-        
-        // Send notification only to invited members
-        for (const member of event.invited_members) {
-          try {
-            await notificationService.sendToUser(
-              member.id,
-              "New Event Available",
-              `You've been invited to a new event: ${event.title}`,
-              {
-                type: "new_event",
-                id: event.id,
-                action: "view",
-              }
-            );
-            console.log(`📧 Sent new event notification to ${member.name} (${member.email})`);
-          } catch (notificationError) {
-            console.error(`❌ Failed to send notification to ${member.name}:`, notificationError);
-          }
+      // 2. Notify all doctors about new available event (only once)
+      await notificationService.sendToRole(
+        "doctor",
+        "New Event Available! 🎉",
+        `Check out the new event: "${event.title}"`,
+        {
+          type: "new_event",
+          id: event.id,
+          action: "view",
         }
-      } else {
-        console.log(`📧 No invited members found, sending notification to all users`);
-        
-        // If no specific members were invited, send to all users (existing behavior)
-        await notificationService.sendToAll(
-          "New Event Available",
-          `Check out the new event: ${event.title}`,
-          {
-            type: "new_event",
-            id: event.id,
-            action: "view",
-          }
-        );
-      }
+      );
 
-      res.json({ message: "Event approved successfully", event });
+      console.log("✅ Event approval notifications sent");
+
+      res.json({
+        message: "Event approved successfully",
+        event,
+      });
     } catch (error) {
       console.error("Error approving event:", error);
       res.status(500).json({ message: error.message });

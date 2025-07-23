@@ -93,6 +93,23 @@ const notificationService = {
   // Send to specific user
   async sendToUser(userId, title, body, data = {}) {
     try {
+      // Check for recent duplicate notifications
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      
+      const { data: recentNotifications } = await supabase
+        .from('notifications')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('title', title)
+        .eq('body', body)
+        .gte('created_at', fiveMinutesAgo);
+
+      // Skip if duplicate found within 5 minutes
+      if (recentNotifications && recentNotifications.length > 0) {
+        console.log(`⏭️ Skipping duplicate notification for user ${userId} (sent within 5 minutes)`);
+        return;
+      }
+
       console.log(`Sending notification to user: ${userId}`);
 
       // Always save to database first
@@ -182,26 +199,28 @@ const notificationService = {
       console.log(`📊 Found ${users.length} users with role ${role}`);
       console.log("📊 Users:", users);
 
-      // Save notification to database for each user
-      let successCount = 0;
-      let failureCount = 0;
-
+      // Check for recent duplicate notifications to prevent spam
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      
       for (const user of users) {
-        try {
-          await this.saveNotificationToDatabase(user.id, title, body, data);
-          console.log(`✅ Saved notification for ${role} user: ${user.id} (${user.email})`);
-          successCount++;
-        } catch (error) {
-          console.error(`❌ Failed to save notification for user ${user.id}:`, error);
-          failureCount++;
+        // Check if user already received same notification recently
+        const { data: recentNotifications } = await supabase
+          .from('notifications')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('title', title)
+          .eq('body', body)
+          .gte('created_at', oneHourAgo);
+
+        // Skip if duplicate found within last hour
+        if (recentNotifications && recentNotifications.length > 0) {
+          console.log(`⏭️ Skipping duplicate notification for user ${user.id}`);
+          continue;
         }
+
+        // Send notification if no recent duplicate
+        await this.sendToUser(user.id, title, body, data);
       }
-
-      console.log(`✅ Notifications for role ${role}: ${successCount} successful, ${failureCount} failed`);
-
-      // Send FCM notifications
-      const userIds = users.map((u) => u.id);
-      return this.sendToUsers(userIds, title, body, data);
     } catch (error) {
       console.error("Error sending notification to role:", error);
     }
