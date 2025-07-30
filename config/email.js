@@ -86,8 +86,78 @@ const sendVerificationEmail = async (user, verificationToken) => {
   return info;
 };
 
+// Add this function to health_server/config/email.js
+
+const sendRegistrationExportEmail = async (adminEmail, eventTitle, registrationCount, csvContent, filename) => {
+  const mailOptions = {
+    from: `"MedEvent Admin" <${process.env.EMAIL_USER}>`,
+    to: adminEmail,
+    subject: `Registration Export: ${eventTitle}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #333;">
+        <div style="text-align: center; margin-bottom: 20px;">
+          <h1 style="color: #2e7af5;">MedEvent</h1>
+        </div>
+        
+        <div style="background-color: #f7f9fc; padding: 20px; border-radius: 10px;">
+          <h2 style="color: #333;">Registration Export Ready</h2>
+          
+          <p>Hi Admin,</p>
+          
+          <p>Your requested registration export for <strong>"${eventTitle}"</strong> is ready.</p>
+          
+          <div style="background-color: #e8f4fc; padding: 15px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="color: #2e7af5; margin: 0 0 10px 0;">Export Summary:</h3>
+            <ul style="margin: 0; padding-left: 20px;">
+              <li><strong>Event:</strong> ${eventTitle}</li>
+              <li><strong>Total Registrations:</strong> ${registrationCount}</li>
+              <li><strong>Export Date:</strong> ${new Date().toLocaleDateString()}</li>
+              <li><strong>File Format:</strong> CSV</li>
+            </ul>
+          </div>
+          
+          <p>The registration data is attached as a CSV file that you can open in Excel or any spreadsheet application.</p>
+          
+          <p><strong>File includes:</strong></p>
+          <ul>
+            <li>Attendee names and contact information</li>
+            <li>Registration dates and times</li>
+            <li>User roles (Doctor/Pharma)</li>
+            <li>Company/organization details</li>
+            <li>Sponsorship information (if applicable)</li>
+          </ul>
+          
+          <p style="margin-top: 30px;">Best regards,<br>MedEvent Team</p>
+        </div>
+        
+        <div style="text-align: center; margin-top: 20px; color: #666; font-size: 14px;">
+          <p>&copy; ${new Date().getFullYear()} MedEvent. All rights reserved.</p>
+        </div>
+      </div>
+    `,
+    attachments: [
+      {
+        filename: filename,
+        content: csvContent,
+        contentType: 'text/csv'
+      }
+    ]
+  };
+
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log('✅ Registration export email sent:', info.messageId);
+    return info;
+  } catch (error) {
+    console.error('❌ Failed to send registration export email:', error);
+    throw error;
+  }
+};
+
+// Add this to your module.exports
 module.exports = {
   transporter,
   sendOTPEmail,
   sendVerificationEmail,
+  sendRegistrationExportEmail, // Add this export
 };

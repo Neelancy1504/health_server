@@ -5,6 +5,7 @@ const { verifyRole, adminOnly } = require("../middleware/roleMiddleware"); // Fi
 const { supabase } = require("../config/supabase");
 const { validate: isUuid } = require("uuid"); // Import UUID validation library
 const notificationService = require("../services/notificationService"); // Add this import
+const { sendRegistrationExportEmail } = require("../config/email"); // Add this import
 
 // In your health_server/routes/admin.js file:
 
@@ -894,6 +895,28 @@ router.get(
   async (req, res) => {
     try {
       const eventId = req.params.id;
+      
+      console.log(`📧 Export request from admin: ${req.user.id} for event: ${eventId}`);
+
+      // First, get the admin's email from the database
+      const { data: adminUser, error: adminError } = await supabase
+        .from("users")
+        .select("email, name")
+        .eq("id", req.user.id)
+        .single();
+
+      if (adminError) {
+        console.error("Error fetching admin details:", adminError);
+        throw adminError;
+      }
+
+      if (!adminUser || !adminUser.email) {
+        console.error("Admin email not found for user:", req.user.id);
+        return res.status(400).json({ message: "Admin email not found" });
+      }
+
+      const adminEmail = adminUser.email;
+      console.log(`📧 Admin email found: ${adminEmail}`);
 
       // Get event details
       const { data: event, error: eventError } = await supabase
@@ -908,41 +931,89 @@ router.get(
         return res.status(404).json({ message: "Event not found" });
       }
 
-      // Get registrations with user details - Remove specialization from selection
+      // Get registrations with user details
       const { data: registrations, error: regError } = await supabase
         .from("event_registrations")
         .select(
           `
           *,
-          user:user_id (id, name, email, role, company, phone)
+          user:user_id (id, name, email, role, company, phone, degree)
         `
         )
         .eq("event_id", eventId);
 
       if (regError) throw regError;
 
-      // Format the data for export
-      const exportData = {
-        eventTitle: event.title,
-        organizerName: event.organizer_name,
-        registrationsCount: registrations.length,
-        exportDate: new Date().toISOString(),
-        registrations: registrations.map((reg) => ({
-          name: reg.user?.name || "Unknown",
-          email: reg.user?.email || "Unknown",
-          phone: reg.user?.phone || "N/A",
-          role: reg.user?.role || "N/A",
-          company: reg.is_sponsor
-            ? reg.company_name
-            : reg.user?.company || "N/A",
-          registered_at: reg.registered_at,
-          is_sponsor: reg.is_sponsor || false,
-          company_name: reg.company_name || "N/A",
-          sponsorship_level: reg.sponsorship_level || "N/A",
-        })),
+      // Create CSV content with proper formatting
+      const csvHeaders = [
+        'Name',
+        'Email', 
+        'Phone',
+        'Role',
+        'Company/Organization',
+        'Degree/Specialization',
+        'Registration Date',
+        'Is Sponsor',
+        'Company Name (if sponsor)',
+        'Sponsorship Level'
+      ];
+
+      const csvRows = registrations.map((reg) => [
+        reg.user?.name || 'Unknown',
+        reg.user?.email || 'Unknown', 
+        reg.user?.phone || 'N/A',
+        reg.user?.role || 'N/A',
+        reg.is_sponsor ? reg.company_name : (reg.user?.company || 'N/A'),
+        reg.user?.degree || 'N/A',
+        new Date(reg.registered_at).toLocaleString(),
+        reg.is_sponsor ? 'Yes' : 'No',
+        reg.company_name || 'N/A',
+        reg.sponsorship_level || 'N/A'
+      ]);
+
+      // Convert to CSV format with proper escaping
+      const escapeCsvField = (field) => {
+        if (field === null || field === undefined) return '';
+        const stringField = String(field);
+        if (stringField.includes(',') || stringField.includes('"') || stringField.includes('\n')) {
+          return `"${stringField.replace(/"/g, '""')}"`;
+        }
+        return stringField;
       };
 
-      res.json(exportData);
+      const csvContent = [
+        csvHeaders.join(','),
+        ...csvRows.map(row => 
+          row.map(field => escapeCsvField(field)).join(',')
+        )
+      ].join('\n');
+
+      // Create filename with timestamp
+      const timestamp = new Date().toISOString().split('T')[0];
+      const sanitizedTitle = event.title.replace(/[^a-zA-Z0-9]/g, '_');
+      const filename = `${sanitizedTitle}_registrations_${timestamp}.csv`;
+
+      console.log(`📧 Sending export email to: ${adminEmail}`);
+      console.log(`📁 File: ${filename} (${registrations.length} registrations)`);
+
+      // Send email with CSV attachment
+      await sendRegistrationExportEmail(
+        adminEmail,
+        event.title,
+        registrations.length,
+        csvContent,
+        filename
+      );
+
+      console.log('✅ Export email sent successfully');
+
+      res.json({
+        message: "Registration data exported and sent to your email",
+        count: registrations.length,
+        sentTo: adminEmail,
+        filename: filename
+      });
+
     } catch (error) {
       console.error("Error exporting registrations:", error);
       res.status(500).json({ message: error.message });
